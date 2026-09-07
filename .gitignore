@@ -1,18 +1,33 @@
+# Gradle
+.gradle/
+/build/
+
+# IDE / machine-specific files
 *.iml
-.gradle
-/local.properties
-/.idea
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
+/.idea/
 local.properties
-app/src/main/jniLibs
-app/release
+
+# Android build outputs
+/captures/
+.externalNativeBuild/
+.cxx/
+app/release/
+app/src/main/jniLibs/
+
+# Native build: QNN SDK libs copied into assets by app/src/main/cpp/build.sh
+app/src/main/assets/qnnlibs/
+
+# Generated sample app modules
 app/basic
 app/filter
-app/src/main/assets/qnnlibs
 
 # Kotlin compiler session artifacts
 .kotlin/
+
+# Cline agent rules
+/.clinerules/
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+desktop.ini
