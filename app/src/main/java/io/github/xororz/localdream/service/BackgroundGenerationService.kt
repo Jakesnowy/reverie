@@ -13,6 +13,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.graphics.createBitmap
 import io.github.xororz.localdream.R
+import io.github.xororz.localdream.remote.RemoteProtocol
 import io.github.xororz.localdream.utils.Http
 import java.io.BufferedReader
 import java.io.File
@@ -97,7 +98,13 @@ class BackgroundGenerationService : Service() {
         object Idle : GenerationState()
         data class Progress(val progress: Float, val intermediateImage: Bitmap? = null) : GenerationState()
 
-        data class Complete(val bitmap: Bitmap, val seed: Long?) : GenerationState()
+        data class Complete(
+            val bitmap: Bitmap,
+            val seed: Long?,
+            // NSFW classifier score from the with_filter build; null when the
+            // basic build ran (no safety checker, nothing to show).
+            val nsfwScore: Float? = null,
+        ) : GenerationState()
         data class Error(val message: String) : GenerationState()
     }
 
@@ -129,7 +136,9 @@ class BackgroundGenerationService : Service() {
         }
 
         val prompt = intent?.getStringExtra("prompt")
-        Log.d("GenerationService", "prompt: $prompt")
+        // #6 privacy: never log the raw prompt (it would reach logcat and
+        // user-shareable bug reports); only its length.
+        Log.d("GenerationService", "prompt length: ${prompt?.length ?: 0}")
 
         if (prompt == null) {
             Log.e("GenerationService", "empty prompt")
@@ -159,6 +168,8 @@ class BackgroundGenerationService : Service() {
         // Backend to talk to: the local backend by default, or a remote host's
         // generation port when running in connected-device mode.
         val backendHost = intent.getStringExtra("backend_host") ?: LOCAL_BACKEND_HOST
+        // Host-mode pairing token (remote mode only).
+        val authToken = intent.getStringExtra("auth_token")
 
         val image = if (ultrafix) {
             try {
@@ -236,6 +247,7 @@ class BackgroundGenerationService : Service() {
                 ultrafix,
                 ultrafixTileSize,
                 backendHost,
+                authToken,
             )
         }
 
@@ -262,6 +274,7 @@ class BackgroundGenerationService : Service() {
         ultrafix: Boolean,
         ultrafixTileSize: Int,
         backendHost: String,
+        authToken: String?,
     ) = withContext(Dispatchers.IO) {
         // Set once the complete event is fully handled; a socket teardown
         // racing the service shutdown after that point is not an error.
@@ -308,6 +321,11 @@ class BackgroundGenerationService : Service() {
 
             val request = Request.Builder()
                 .url("http://$backendHost/generate")
+                .apply {
+                    authToken?.let {
+                        header(RemoteProtocol.HEADER_AUTH, RemoteProtocol.bearer(it))
+                    }
+                }
                 .post(jsonObject.toString().toRequestBody("application/json".toMediaTypeOrNull()))
                 .build()
 
@@ -417,6 +435,13 @@ class BackgroundGenerationService : Service() {
                                         message.optLong("seed", -1).takeIf { it != -1L }
                                     val resultWidth = message.optInt("width", 512)
                                     val resultHeight = message.optInt("height", 512)
+                                    // Only present in the with_filter build's
+                                    // responses (a safety checker is loaded).
+                                    val nsfwScore = if (message.has("nsfw_score")) {
+                                        message.optDouble("nsfw_score", -1.0).toFloat()
+                                    } else {
+                                        null
+                                    }
                                     Log.d(
                                         "BgGenService",
                                         "JSON extraction took: ${System.currentTimeMillis() - extractStart}ms, Base64 length: ${base64Image.length}",
@@ -468,6 +493,7 @@ class BackgroundGenerationService : Service() {
                                         GenerationState.Complete(
                                             bitmap,
                                             returnedSeed,
+                                            nsfwScore,
                                         ),
                                     )
 

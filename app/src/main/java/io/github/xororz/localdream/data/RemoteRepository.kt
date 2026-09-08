@@ -20,6 +20,8 @@ data class RemoteConnection(
     val host: String,
     val port: Int,
     val deviceName: String,
+    // Host-mode pairing token; null when the host predates token support.
+    val token: String? = null,
 )
 
 sealed class RemoteConnectResult {
@@ -70,8 +72,12 @@ class RemoteRepository private constructor(private val context: Context) {
     val isActive: Boolean get() = connection != null
 
     fun client(): RemoteApiClient? = connection?.let {
-        RemoteApiClient(it.host, it.port)
+        RemoteApiClient(it.host, it.port, it.token)
     }
+
+    /** The saved pairing token, sent with every request to the host. */
+    val authToken: String?
+        get() = connection?.token
 
     fun resolutionsFor(modelId: String): List<Resolution> = resolutionsById[modelId].orEmpty()
 
@@ -105,30 +111,33 @@ class RemoteRepository private constructor(private val context: Context) {
             host = host,
             port = prefs.getInt(KEY_PORT, RemoteProtocol.CONTROL_PORT),
             deviceName = prefs.getString(KEY_NAME, host) ?: host,
+            token = prefs.getString(KEY_CODE, null).orEmpty().ifEmpty { null },
         )
     }
 
     /**
      * Verifies the host at [hostInput] ("ip" or "ip:port"), fetches its
-     * catalog and persists the link on success.
+     * catalog and persists the link on success. [token] is the host's
+     * displayed pairing code (optional for hosts without token support).
      */
-    suspend fun connect(hostInput: String): RemoteConnectResult {
+    suspend fun connect(hostInput: String, token: String? = null): RemoteConnectResult {
         val host = hostInput.substringBefore(':').trim()
         val port = hostInput.substringAfter(':', "").toIntOrNull()
             ?: RemoteProtocol.CONTROL_PORT
         if (host.isEmpty()) return RemoteConnectResult.Unreachable
 
-        val client = RemoteApiClient(host, port)
+        val client = RemoteApiClient(host, port, token)
         val info = client.fetchInfo() ?: return RemoteConnectResult.Unreachable
         val catalog = client.fetchCatalog() ?: return RemoteConnectResult.Unreachable
 
         val name = info.deviceName.ifEmpty { host }
-        connection = RemoteConnection(host, port, name)
+        connection = RemoteConnection(host, port, name, token)
         applyCatalog(catalog)
         online = true
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit {
             putString(KEY_HOST, host)
             putInt(KEY_PORT, port)
+            putString(KEY_CODE, token.orEmpty())
             putString(KEY_NAME, name)
         }
         return RemoteConnectResult.Success(name)

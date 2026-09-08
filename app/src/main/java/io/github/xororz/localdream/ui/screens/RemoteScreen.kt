@@ -92,6 +92,7 @@ fun RemoteScreen(navController: NavController, modifier: Modifier = Modifier) {
     val msgUnreachable = stringResource(R.string.remote_connect_failed_unreachable)
 
     var hostInput by remember { mutableStateOf("") }
+    var tokenInput by remember { mutableStateOf("") }
     var connecting by remember { mutableStateOf(false) }
     var connectError by remember { mutableStateOf<String?>(null) }
 
@@ -199,6 +200,18 @@ fun RemoteScreen(navController: NavController, modifier: Modifier = Modifier) {
                                 }
                             }
                             HorizontalDivider()
+                            // The pairing code controllers must enter alongside
+                            // the address; same token guards both ports.
+                            Text(
+                                stringResource(
+                                    R.string.remote_pairing_code,
+                                    RemoteHostService.pairingToken(context),
+                                ),
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            HorizontalDivider()
                             Text(
                                 servingModelId?.let {
                                     stringResource(R.string.remote_host_serving, it)
@@ -299,6 +312,13 @@ fun RemoteScreen(navController: NavController, modifier: Modifier = Modifier) {
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
                             )
+                            OutlinedTextField(
+                                value = tokenInput,
+                                onValueChange = { tokenInput = it },
+                                label = { Text(stringResource(R.string.remote_pairing_code_label)) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
                             connectError?.let { error ->
                                 Text(
                                     error,
@@ -311,7 +331,10 @@ fun RemoteScreen(navController: NavController, modifier: Modifier = Modifier) {
                                     connectError = null
                                     connecting = true
                                     scope.launch {
-                                        val result = remoteRepository.connect(hostInput.trim())
+                                        val result = remoteRepository.connect(
+                                            hostInput.trim(),
+                                            tokenInput.trim().ifEmpty { null },
+                                        )
                                         connecting = false
                                         when (result) {
                                             is RemoteConnectResult.Success -> {

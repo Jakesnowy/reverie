@@ -64,6 +64,7 @@ internal data class TokenizeResult(val count: Int, val maxLength: Int, val overf
 internal suspend fun tokenizePromptRequest(
     text: String,
     backendHost: String = BackgroundGenerationService.LOCAL_BACKEND_HOST,
+    authToken: String? = null,
 ): TokenizeResult? = withContext(Dispatchers.IO) {
     try {
         val body = JSONObject().apply { put("prompt", text) }
@@ -71,6 +72,11 @@ internal suspend fun tokenizePromptRequest(
             .toRequestBody("application/json".toMediaTypeOrNull())
         val request = Request.Builder()
             .url("http://$backendHost/tokenize")
+            .apply {
+                authToken?.let {
+                    header(RemoteProtocol.HEADER_AUTH, RemoteProtocol.bearer(it))
+                }
+            }
             .post(body)
             .build()
         tokenizeClient.newCall(request).execute().use { response ->
@@ -508,4 +514,6 @@ data class GenerationParameters(
     val useOpenCL: Boolean = false,
     val scheduler: String = "dpm",
     val mode: GenerationMode = GenerationMode.UNKNOWN,
+    // NSFW classifier score from the with_filter build; null otherwise.
+    val nsfwScore: Float? = null,
 )

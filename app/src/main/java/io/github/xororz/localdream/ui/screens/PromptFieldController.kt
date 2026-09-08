@@ -223,18 +223,22 @@ internal fun rememberPromptFieldController(
 /**
  * Debounced backend tokenizer sync for one prompt field. Only runs once the
  * backend is reachable; re-runs whenever the text changes. [backendHost]
- * selects the local backend or a remote host's generation port.
+ * selects the local backend or a remote host's generation port; [authToken]
+ * is the host-mode pairing token (remote mode only).
  */
 @Composable
 internal fun PromptTokenCountEffect(
     controller: PromptFieldController,
     backendReady: Boolean,
     backendHost: String,
+    authToken: String? = null,
 ) {
-    LaunchedEffect(controller.text, backendReady, backendHost) {
+    LaunchedEffect(controller.text, backendReady, backendHost, authToken) {
         if (!backendReady) return@LaunchedEffect
         delay(400)
-        val result = tokenizePromptRequest(controller.text, backendHost) ?: return@LaunchedEffect
+        val result =
+            tokenizePromptRequest(controller.text, backendHost, authToken)
+                ?: return@LaunchedEffect
         controller.tokenCount = result.count
         controller.tokenMax = result.maxLength
         controller.overflowOffset = result.overflowOffset

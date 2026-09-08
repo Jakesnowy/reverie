@@ -36,12 +36,12 @@ import org.json.JSONObject
 /**
  * Host-mode (controlled device, "A") foreground service.
  *
- * Runs the small authenticated control API ([RemoteHostServer]) that lets a
- * controller device list this device's installed models, activate one and
- * watch backend state. While active it also flips the
- * [KEY_HOST_MODE_ACTIVE] preference so [BackendService] starts the native
- * backend with --listen_all, letting the controller talk to the generation
- * port directly.
+ * Runs the control API ([RemoteHostServer]) that lets a controller device list
+ * this device's installed models, activate one and watch backend state. All
+ * routes except /info require the pairing token shown in this service's
+ * notification. While active it also makes [BackendService] start the native
+ * backend with --listen_all and the same pairing token, letting the
+ * controller talk to the generation port directly.
  */
 class RemoteHostService : Service() {
     private var server: RemoteHostServer? = null
@@ -66,12 +66,13 @@ class RemoteHostService : Service() {
             return START_NOT_STICKY
         }
 
-        startForeground(NOTIFICATION_ID, createNotification())
+        startForeground(NOTIFICATION_ID, createNotification(pairingToken(this)))
 
         if (server == null) {
             val newServer = RemoteHostServer(
                 port = RemoteProtocol.CONTROL_PORT,
                 handler = ApiHandler(),
+                authToken = pairingToken(this),
             )
             try {
                 newServer.start()
@@ -316,7 +317,7 @@ class RemoteHostService : Service() {
         manager.createNotificationChannel(channel)
     }
 
-    private fun createNotification(): Notification {
+    private fun createNotification(pairingCode: String): Notification {
         val openAppIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK
         }
@@ -326,9 +327,12 @@ class RemoteHostService : Service() {
             openAppIntent,
             PendingIntent.FLAG_IMMUTABLE,
         )
+        val text = getString(R.string.remote_host_notify) + "\n" +
+            getString(R.string.remote_pairing_code, pairingCode)
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.remote_host_notify_title))
-            .setContentText(getString(R.string.remote_host_notify))
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setSmallIcon(R.drawable.ic_launcher_monochrome)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -340,9 +344,32 @@ class RemoteHostService : Service() {
         private const val CHANNEL_ID = "remote_host_channel"
         private const val NOTIFICATION_ID = 4
         private const val PREFS_NAME = "app_prefs"
+        private const val KEY_PAIR_TOKEN = "remote_pair_token"
 
         // Keep in sync with UpscalerRepository's fixed upscaler set.
         private val UPSCALER_IDS = listOf("upscaler_anime", "upscaler_realistic")
+
+        /**
+         * Host-mode pairing token: generated once per install and persisted.
+         * While host mode is active, both the control API and the native
+         * generation port require it, and it is displayed (notification and
+         * host screen) so the controller can be configured with it.
+         */
+        fun pairingToken(context: Context): String {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.getString(KEY_PAIR_TOKEN, null)?.let { return it }
+            // Unambiguous alphabet, grouped for readability ("XXXX-XXXX").
+            val alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+            val rng = java.security.SecureRandom()
+            val code = buildString {
+                repeat(8) { i ->
+                    if (i == 4) append('-')
+                    append(alphabet[rng.nextInt(alphabet.length)])
+                }
+            }
+            prefs.edit().putString(KEY_PAIR_TOKEN, code).apply()
+            return code
+        }
 
         const val ACTION_STOP = "io.github.xororz.localdream.STOP_REMOTE_HOST"
 

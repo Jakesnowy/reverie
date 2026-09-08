@@ -46,6 +46,7 @@ import coil.request.ImageRequest
 import io.github.xororz.localdream.BuildConfig
 import io.github.xororz.localdream.R
 import io.github.xororz.localdream.data.DownloadProgress
+import io.github.xororz.localdream.data.Model
 import io.github.xororz.localdream.data.RemoteRepository
 import io.github.xororz.localdream.data.UpscalerRepository
 import io.github.xororz.localdream.navigation.popBackStackIfResumed
@@ -194,7 +195,9 @@ fun UpscaleScreen(navController: NavController, modifier: Modifier = Modifier) {
                     "--lib_dir",
                     runtimeDir.absolutePath,
                     "--port",
-                    "8081",
+                    RemoteProtocol.GENERATION_PORT.toString(),
+                    "--models_root",
+                    Model.getModelsDir(context).absolutePath,
                 )
                 if (listenOnAll) {
                     command = command + "--listen_all"
@@ -775,6 +778,7 @@ fun UpscaleScreen(navController: NavController, modifier: Modifier = Modifier) {
                                     upscalerId = selectedUpscaler.id,
                                     targetScale = targetScale,
                                     backendHost = backendHost,
+                                    authToken = if (isRemote) remoteRepository.authToken else null,
                                     remoteUpscalerPath = if (isRemote) {
                                         remoteRepository.upscalerPaths[selectedUpscaler.id]
                                     } else {

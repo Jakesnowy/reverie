@@ -202,6 +202,8 @@ fun ModelRunScreen(
     }
     val backendHost = remoteClient?.generationHost
         ?: BackgroundGenerationService.LOCAL_BACKEND_HOST
+    // Host-mode pairing token; null in local mode.
+    val backendAuthToken = remoteClient?.token
 
     // String resources hoisted to composable scope (lint: LocalContextGetResourceValueCall).
     val msgMediaPermissionHint = stringResource(R.string.media_permission_hint)
@@ -641,8 +643,18 @@ fun ModelRunScreen(
     promptField.onTextCommitted = { saveAllFields() }
     negativePromptField.onTextCommitted = { saveAllFields() }
 
-    PromptTokenCountEffect(promptField, backendReady = backendReady, backendHost = backendHost)
-    PromptTokenCountEffect(negativePromptField, backendReady = backendReady, backendHost = backendHost)
+    PromptTokenCountEffect(
+        promptField,
+        backendReady = backendReady,
+        backendHost = backendHost,
+        authToken = backendAuthToken,
+    )
+    PromptTokenCountEffect(
+        negativePromptField,
+        backendReady = backendReady,
+        backendHost = backendHost,
+        authToken = backendAuthToken,
+    )
 
     val onBatchCountsChange = remember {
         { value: Float ->
@@ -946,6 +958,7 @@ fun ModelRunScreen(
                     putExtra("ultrafix", true)
                     putExtra("ultrafix_tile_size", tileSize)
                     putExtra("backend_host", backendHost)
+                    backendAuthToken?.let { putExtra("auth_token", it) }
                 }
                 context.startForegroundService(intent)
                 true
@@ -1408,6 +1421,7 @@ fun ModelRunScreen(
                         useOpenCL = generationParamsTmp.useOpenCL,
                         scheduler = generationParamsTmp.scheduler,
                         mode = currentGenerationMode,
+                        nsfwScore = state.nsfwScore,
                     )
 
                     // Save to disk and update history list. The saved item's id is
@@ -2020,6 +2034,7 @@ fun ModelRunScreen(
                                             putExtra("aspect_ratio", aspectRatio)
                                             putExtra("batch_index", i)
                                             putExtra("backend_host", backendHost)
+                                            backendAuthToken?.let { putExtra("auth_token", it) }
                                             if (selectedImageUri != null && base64EncodeDone) {
                                                 putExtra("has_image", true)
                                                 if (isInpaintMode && maskBitmap != null) {

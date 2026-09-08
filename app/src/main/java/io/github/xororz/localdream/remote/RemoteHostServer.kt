@@ -19,14 +19,15 @@ import org.json.JSONObject
  * heavy (generation SSE, tokenize, upscale) is served by the native backend
  * on its own port, never through here.
  *
- * No authentication, matching the trust model of the existing "allow LAN
- * access" feature: the generation port itself is unauthenticated, so gating
- * only the control API would add friction without adding security. Host mode
- * is explicit and user-visible while active.
+ * When [authToken] is set, every route except /info (discovery) requires the
+ * "Authorization: Bearer <token>" header with the pairing code the host
+ * displays; the native generation port enforces the same token, so gating
+ * only the control API here would still leave the LAN-facing engine open.
  */
 class RemoteHostServer(
     private val port: Int,
     private val handler: Handler,
+    private val authToken: String? = null,
 ) {
     interface Handler {
         fun info(): JSONObject
@@ -103,6 +104,7 @@ class RemoteHostServer(
         val method: String,
         val path: String,
         val body: JSONObject,
+        val authHeader: String? = null,
     )
 
     private fun parseRequest(input: InputStream): Request? {
@@ -114,6 +116,7 @@ class RemoteHostServer(
         val path = parts[1].substringBefore('?')
 
         var contentLength = 0
+        var authHeader: String? = null
         while (true) {
             val line = readLine(input) ?: return null
             if (line.isEmpty()) break
@@ -121,6 +124,8 @@ class RemoteHostServer(
             val value = line.substringAfter(':').trim()
             if (name == "content-length") {
                 contentLength = value.toIntOrNull() ?: 0
+            } else if (name == "authorization") {
+                authHeader = value
             }
         }
         if (contentLength > MAX_BODY_BYTES) return null
@@ -136,12 +141,16 @@ class RemoteHostServer(
             try {
                 JSONObject(String(bytes, 0, read, StandardCharsets.UTF_8))
             } catch (_: Exception) {
-                JSONObject()
+                // A malformed body must not masquerade as an empty one (an
+                // empty body is legitimate for /stop); null makes serve()
+                // answer 400 "bad request" instead of routing garbage into
+                // the handlers.
+                return null
             }
         } else {
             JSONObject()
         }
-        return Request(method, path, body)
+        return Request(method, path, body, authHeader)
     }
 
     // Reads one CRLF/LF-terminated header line as ISO-8859-1 (headers are
@@ -161,6 +170,12 @@ class RemoteHostServer(
     private fun route(request: Request): Response {
         if (request.path == RemoteProtocol.PATH_INFO) {
             return Response(200, handler.info())
+        }
+        // Pairing token gate: /info stays open for discovery, everything
+        // else requires the code shown on the host device.
+        val expected = authToken?.let { RemoteProtocol.bearer(it) }
+        if (expected != null && request.authHeader != expected) {
+            return Response(401, errorBody("unauthorized"))
         }
         return when {
             request.method == "GET" && request.path == RemoteProtocol.PATH_MODELS ->

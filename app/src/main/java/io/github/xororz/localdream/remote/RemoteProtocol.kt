@@ -7,12 +7,12 @@ import org.json.JSONObject
  * Wire protocol between a controller device (B) and a host device (A).
  *
  * The host exposes two ports:
- *  - CONTROL_PORT: a small authenticated JSON API served by [RemoteHostServer]
- *    (model catalog, model activation, backend status).
+ *  - CONTROL_PORT: a small JSON API served by [RemoteHostServer], protected
+ *    by the host's pairing token on every route except /info.
  *  - GENERATION_PORT: the native backend itself, started with --listen_all
- *    while host mode is active. The controller talks to /generate, /tokenize
- *    and /health on it directly, reusing the exact same client code paths as
- *    local generation.
+ *    and --auth_token while host mode is active. The controller talks to
+ *    /generate, /tokenize and /health on it directly, reusing the exact same
+ *    client code paths as local generation, and must present the same token.
  */
 object RemoteProtocol {
     const val CONTROL_PORT = 8808
@@ -35,9 +35,16 @@ object RemoteProtocol {
     const val STATE_STARTING = "starting"
     const val STATE_RUNNING = "running"
     const val STATE_ERROR = "error"
+
+    // Pairing-token auth header. Both the control API and the native
+    // generation port expect "Bearer <token>" (the engine also accepts a
+    // bare X-LD-Auth header).
+    const val HEADER_AUTH = "Authorization"
+
+    fun bearer(token: String): String = "Bearer $token"
 }
 
-/** Identity block returned by GET /info (the only unauthenticated endpoint). */
+/** Identity block returned by GET /info (unauthenticated, used for discovery). */
 data class RemoteHostInfo(
     val protocol: Int,
     val version: String,

@@ -58,6 +58,11 @@ struct ServerOptions {
   std::string lib_dir;
   std::string patch_path;
   std::string safety_checker_path;
+  // When set, /upscale only accepts X-Upscaler-Path values resolving under
+  // this directory (defeats arbitrary native-parser input on the LAN).
+  std::string models_root;
+  // When set, every endpoint requires this pairing token (X-LD-Auth header).
+  std::string auth_token;
   float nsfw_threshold = 0.5f;
   bool use_v_pred = false;
   bool no_img2img = false;  // skip the VAE encoder entirely
@@ -96,9 +101,11 @@ static void showHelp() {
          "  --patch <file>         zstd resolution patch for unet.bin "
          "(sd15npu)\n"
          "  --safety_checker <f>   NSFW checker MNN model\n"
+         "  --models_root <dir>    /upscale only accepts weights under <dir>\n"
          "\n"
          "Options:\n"
          "  --port <n>             HTTP port (default 8081)\n"
+         "  --auth_token <t>       Require token via X-LD-Auth header\n"
          "  --listen_all           Listen on 0.0.0.0 instead of 127.0.0.1\n"
          "  --no_img2img           Do not load the VAE encoder\n"
          "  --use_v_pred           v-prediction model\n"
@@ -136,6 +143,8 @@ static ServerOptions processCommandLine(int argc, char **argv) {
     OPT_UPSCALER_MODE,
     OPT_LOWRAM,
     OPT_ANIMA_SEQ_DIT,
+    OPT_MODELS_ROOT,
+    OPT_AUTH_TOKEN,
     OPT_LOG_LEVEL
   };
   static struct pal::Option s_longOptions[] = {
@@ -155,6 +164,8 @@ static ServerOptions processCommandLine(int argc, char **argv) {
       {"upscaler_mode", pal::no_argument, NULL, OPT_UPSCALER_MODE},
       {"lowram", pal::no_argument, NULL, OPT_LOWRAM},
       {"anima_seq_dit", pal::no_argument, NULL, OPT_ANIMA_SEQ_DIT},
+      {"models_root", pal::required_argument, NULL, OPT_MODELS_ROOT},
+      {"auth_token", pal::required_argument, NULL, OPT_AUTH_TOKEN},
       {"log_level", pal::required_argument, NULL, OPT_LOG_LEVEL},
       {NULL, 0, NULL, 0}};
 
@@ -215,6 +226,12 @@ static ServerOptions processCommandLine(int argc, char **argv) {
         break;
       case OPT_ANIMA_SEQ_DIT:
         opts.anima_seq_dit = true;
+        break;
+      case OPT_MODELS_ROOT:
+        opts.models_root = pal::g_optArg;
+        break;
+      case OPT_AUTH_TOKEN:
+        opts.auth_token = pal::g_optArg;
         break;
       case OPT_LOG_LEVEL:
         logLevel = sample_app::parseLogLevel(pal::g_optArg);
@@ -386,17 +403,83 @@ static std::string encodeResultImage(const GenerationResult &result,
 // new request arriving while an aborted one is still winding down).
 static std::mutex g_generation_mutex;
 
-static void registerGenerateEndpoint(httplib::Server &svr, Pipeline *pipeline) {
-  svr.Post("/generate", [pipeline](const httplib::Request &request,
-                                   httplib::Response &res) {
+// Populated from the command line in main(). g_models_root restricts
+// /upscale's X-Upscaler-Path to weights under the app's models directory;
+// g_auth_token (host-mode pairing token) makes every endpoint require it.
+static std::string g_models_root;
+static std::string g_auth_token;
+
+// True when the request presents the required pairing token. A no-op when no
+// token was configured (plain local loopback mode).
+static bool requestAuthorized(const httplib::Request &req) {
+  if (g_auth_token.empty()) return true;
+  std::string presented = req.get_header_value("X-LD-Auth");
+  if (presented.rfind("Bearer ", 0) == 0) presented = presented.substr(7);
+  return presented == g_auth_token;
+}
+
+static void respondUnauthorized(httplib::Response &res) {
+  nlohmann::json err = {
+      {"error", {{"message", "Unauthorized"}, {"type", "request_error"}}}};
+  res.status = 401;
+  res.set_content(err.dump(), "application/json");
+}
+
+// Rejects upscaler weight paths outside --models_root (and anything that is
+// not an .mnn/.bin weight) so a hostile request can't point the native
+// QNN/MNN parsers at arbitrary files.
+static bool isAcceptedUpscalerPath(const std::string &path) {
+  std::string ext = path.size() >= 4 ? path.substr(path.size() - 4) : "";
+  std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+  if (ext != ".mnn" && ext != ".bin") return false;
+  if (g_models_root.empty()) return true;
+  std::error_code ec;
+  auto canon_root = std::filesystem::weakly_canonical(g_models_root, ec);
+  if (ec) return false;
+  auto canon_path = std::filesystem::weakly_canonical(path, ec);
+  if (ec) return false;
+  std::string root = canon_root.string();
+  std::string candidate = canon_path.string();
+  if (root == candidate) return false;
+  if (root.back() != '/') root += '/';
+  return candidate.rfind(root, 0) == 0;
+}
+
+static void registerGenerateEndpoint(httplib::Server &svr, Pipeline *pipeline,
+                                     TextEncoder *text_encoder) {
+  svr.Post("/generate", [pipeline,
+                         text_encoder](const httplib::Request &request,
+                                       httplib::Response &res) {
+    if (!requestAuthorized(request)) {
+      respondUnauthorized(res);
+      return;
+    }
     try {
       auto json = nlohmann::json::parse(request.body);
       auto req = std::make_shared<GenerationRequest>(parseGenerationRequest(
           json, pipeline->isSdxl(), pipeline->isAnima(),
           pipeline->supportsImg2Img(), pipeline->supportsUltrafix()));
 
-      std::cout << "Req Rcvd: P:" << req->prompt
-                << " NP:" << req->negative_prompt << " S:" << req->steps
+      // Log prompt token counts, never the raw prompt text: backend stdout is
+      // forwarded to logcat (and shipped in bug reports) by BackendService.
+      int p_tokens = -1;
+      int np_tokens = -1;
+      if (text_encoder) {
+        const int max_len =
+            text_encoder->isAnima() ? anima_text_seq_len : 77;
+        try {
+          p_tokens =
+              text_encoder->tokenizeInfo(req->prompt, max_len).count;
+        } catch (const std::exception &) {
+        }
+        try {
+          np_tokens =
+              text_encoder->tokenizeInfo(req->negative_prompt, max_len).count;
+        } catch (const std::exception &) {
+        }
+      }
+      std::cout << "Req Rcvd: P_tokens:" << p_tokens
+                << " NP_tokens:" << np_tokens << " S:" << req->steps
                 << " CFG:" << req->cfg << " Seed:" << req->seed
                 << " Size:" << req->width << "x" << req->height
                 << " Img2Img:" << req->img2img << " Mask:" << req->has_mask
@@ -450,6 +533,12 @@ static void registerGenerateEndpoint(httplib::Server &svr, Pipeline *pipeline) {
                   {"channels", result.channels},
                   {"generation_time_ms", result.generation_time_ms},
                   {"first_step_time_ms", result.first_step_time_ms}};
+              // NSFW score is only ever computed in the with_filter build
+              // (a safety checker is loaded); include it then so the app can
+              // show it in the image properties. Omitted otherwise.
+              if (result.nsfw_score >= 0.0f) {
+                c["nsfw_score"] = result.nsfw_score;
+              }
               std::string ev = "event: complete\ndata: " + c.dump() + "\n\n";
               auto send_start = std::chrono::high_resolution_clock::now();
               sink.write(ev.c_str(), ev.size());
@@ -501,6 +590,10 @@ static void registerUpscaleEndpoint(httplib::Server &svr) {
     std::unique_ptr<QnnModel> tempUpscalerApp = nullptr;
 
     try {
+      if (!requestAuthorized(req)) {
+        respondUnauthorized(res);
+        return;
+      }
       if (!req.has_header("X-Image-Width")) {
         throw std::invalid_argument("Missing 'X-Image-Width' header");
       }
@@ -514,6 +607,14 @@ static void registerUpscaleEndpoint(httplib::Server &svr) {
       int original_width = std::stoi(req.get_header_value("X-Image-Width"));
       int original_height = std::stoi(req.get_header_value("X-Image-Height"));
       std::string upscaler_path = req.get_header_value("X-Upscaler-Path");
+
+      // Path allowlist: the weight file must be an .mnn/.bin file inside the
+      // configured models root, never an arbitrary attacker-chosen path.
+      if (!isAcceptedUpscalerPath(upscaler_path)) {
+        throw std::invalid_argument(
+            "Rejected 'X-Upscaler-Path': must be an .mnn/.bin weight inside "
+            "the models directory");
+      }
 
       // Check if use_opencl header is present (for MNN models).
       bool use_opencl = false;
@@ -625,8 +726,6 @@ static void registerUpscaleEndpoint(httplib::Server &svr) {
       res.set_header("X-Output-Width", std::to_string(final_width));
       res.set_header("X-Output-Height", std::to_string(final_height));
       res.set_header("X-Duration-Ms", std::to_string(duration));
-      res.set_header("Access-Control-Expose-Headers",
-                     "X-Output-Width,X-Output-Height,X-Duration-Ms");
 
       if (tempUpscalerApp) {
         tempUpscalerApp.reset();
@@ -657,6 +756,10 @@ static void registerTokenizeEndpoint(httplib::Server &svr,
                                      TextEncoder *text_encoder) {
   svr.Post("/tokenize", [text_encoder](const httplib::Request &req,
                                        httplib::Response &res) {
+    if (!requestAuthorized(req)) {
+      respondUnauthorized(res);
+      return;
+    }
     try {
       auto json = nlohmann::json::parse(req.body);
       std::string text = json.value("prompt", std::string());
@@ -687,6 +790,8 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
   ServerOptions opts = processCommandLine(argc, argv);
+  g_models_root = opts.models_root;
+  g_auth_token = opts.auth_token;
 
   if (opts.convert_mode) {
     runConvertMode(opts);
@@ -773,20 +878,19 @@ int main(int argc, char **argv) {
 
   // --- HTTP Server ---
   httplib::Server svr;
-  svr.set_default_headers({
-      {"Access-Control-Allow-Origin", "*"},
-      {"Access-Control-Allow-Methods", "GET, POST, OPTIONS"},
-      {"Access-Control-Allow-Headers", "Content-Type, Authorization"},
-      {"Access-Control-Max-Age", "86400"},
-  });
-  svr.Options(R"(.*)", [](const httplib::Request &, httplib::Response &res) {
-    res.status = 204;
-  });
-  svr.Get("/health", [](const httplib::Request &, httplib::Response &res) {
+  // No CORS headers on purpose: the only client is the app's OkHttp traffic,
+  // which is not subject to CORS. Wildcard CORS on an open port would let any
+  // web page a user browses read responses from these ports.
+  svr.Get("/health", [](const httplib::Request &req, httplib::Response &res) {
+    if (!requestAuthorized(req)) {
+      respondUnauthorized(res);
+      return;
+    }
     res.status = 200;
   });
 
-  if (pipeline) registerGenerateEndpoint(svr, pipeline.get());
+  if (pipeline)
+    registerGenerateEndpoint(svr, pipeline.get(), text_encoder.get());
   registerUpscaleEndpoint(svr);
   if (text_encoder) registerTokenizeEndpoint(svr, text_encoder.get());
 

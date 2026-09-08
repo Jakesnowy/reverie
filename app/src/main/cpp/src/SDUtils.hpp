@@ -32,6 +32,8 @@ struct GenerationResult {
   int channels;
   int generation_time_ms;
   int first_step_time_ms;
+  // NSFW classifier score; negative when no safety checker ran (basic build).
+  float nsfw_score = -1.0f;
 };
 
 inline std::string base64_encode(const std::string &in) {
@@ -222,7 +224,6 @@ bool safety_check(const std::vector<uint8_t> &image_data, int width, int height,
     auto output_tensor = interpreter->getSessionOutput(session, nullptr);
     auto outputHost = output_tensor->host<float>();
     nsfw_score = outputHost[1];
-    std::cout << "NSFW Score: " << nsfw_score << std::endl;
     return true;
   } catch (const std::exception &e) {
     std::cerr << "Safety check error: " << e.what() << std::endl;

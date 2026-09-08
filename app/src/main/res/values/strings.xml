@@ -452,6 +452,9 @@
     <string name="clean_temp_none">No temporary files to clean</string>
     <string name="clean_temp_done">Freed %s</string>
 
+    <!-- Image properties -->
+    <string name="basic_nsfw_score">NSFW score: %1$s</string>
+
     <!-- Device link (remote control between two devices) -->
     <string name="remote_link">Device link</string>
     <string name="remote_host_section">Host mode (this device runs models)</string>
@@ -477,6 +480,8 @@
     <string name="remote_port_hint">Default control port: %1$d. Use address:port to override.</string>
     <string name="remote_host_notify_title">Host mode active</string>
     <string name="remote_host_notify">Local Dream can be controlled from your local network</string>
+    <string name="remote_pairing_code">Pairing code: %1$s</string>
+    <string name="remote_pairing_code_label">Pairing code (shown on the host; leave empty if unused)</string>
     <string name="remote_screen_shield">Black screen (stay awake)</string>
     <string name="remote_screen_shield_exit">Tap to exit</string>
     <string name="ultrafix_import_action">Import local image</string>

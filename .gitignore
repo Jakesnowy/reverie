@@ -27,6 +27,9 @@ app/filter
 # Cline agent rules
 /.clinerules/
 
+# Change documentation
+Commit_2.md
+
 # OS-generated files
 .DS_Store
 Thumbs.db

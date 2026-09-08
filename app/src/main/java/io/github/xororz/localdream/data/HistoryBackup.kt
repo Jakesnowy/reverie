@@ -221,6 +221,7 @@ object HistoryBackup {
         put("runOnCpu", e.runOnCpu)
         put("useOpenCL", e.useOpenCL)
         put("favorite", e.favorite)
+        e.nsfwScore?.let { put("nsfwScore", it.toDouble()) }
     }
 
     private fun jsonToEntity(json: JSONObject): HistoryEntity? {
@@ -251,6 +252,11 @@ object HistoryBackup {
             runOnCpu = json.optBoolean("runOnCpu", false),
             useOpenCL = json.optBoolean("useOpenCL", false),
             favorite = json.optBoolean("favorite", false),
+            nsfwScore = if (json.has("nsfwScore") && !json.isNull("nsfwScore")) {
+                json.optDouble("nsfwScore").toFloat()
+            } else {
+                null
+            },
         )
     }
 }

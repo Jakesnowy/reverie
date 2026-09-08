@@ -115,12 +115,18 @@ class ModelDownloadService : Service() {
 
                 val tempDir = File(filesDir, "temp_downloads")
 
+                // Clean stale temp files from earlier runs, but keep this
+                // model's own partial download so a retry can resume it.
                 if (tempDir.exists()) {
-                    tempDir.deleteRecursively()
+                    tempDir.listFiles()?.forEach {
+                        if (it.name != "$modelId.tmp") it.deleteRecursively()
+                    }
                 }
                 tempDir.mkdirs()
 
-                tempFile = File(tempDir, "${modelId}_${System.currentTimeMillis()}.tmp")
+                // Deterministic name so downloadFile can find (and resume
+                // from) the partial file of a previous attempt.
+                tempFile = File(tempDir, "$modelId.tmp")
 
                 downloadFile(fileUrl, tempFile, modelId, modelName)
 
@@ -194,8 +200,11 @@ class ModelDownloadService : Service() {
             } catch (e: Exception) {
                 Log.e(TAG, "Download failed", e)
 
-                tempFile?.delete()
+                // Keep the partial .tmp file on disk: the next download
+                // attempt for the same model resumes from it (see
+                // downloadFile). Extract leftovers are useless though.
                 extractTempDir?.deleteRecursively()
+                tempFile = null
 
                 _downloadState.value =
                     DownloadState.Error(modelId, e.message ?: getString(R.string.unknown_error))
@@ -211,22 +220,54 @@ class ModelDownloadService : Service() {
         }
     }
 
-    private suspend fun downloadFile(url: String, destFile: File, modelId: String, modelName: String) = withContext(Dispatchers.IO) {
+    private suspend fun downloadFile(
+        url: String,
+        destFile: File,
+        modelId: String,
+        modelName: String,
+    ): Unit = withContext(Dispatchers.IO) {
+        // Resume support: keep the partial file between attempts and ask the
+        // server for the remaining bytes. destFile has a deterministic name
+        // (see startDownload) so the partial file from a previous attempt is
+        // still there after a failure or cancel.
+        val resumeFrom = if (destFile.exists()) destFile.length() else 0L
         val request = Request.Builder()
             .url(url)
+            .apply {
+                if (resumeFrom > 0) header("Range", "bytes=$resumeFrom-")
+            }
             .build()
 
         client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw Exception(getString(R.string.error_download_failed, response.code.toString()))
+            when {
+                // The stored partial file no longer matches what the server
+                // has (416 Range Not Satisfiable): discard it and start over.
+                response.code == 416 -> {
+                    destFile.delete()
+                    return@withContext downloadFile(url, destFile, modelId, modelName)
+                }
+                response.code != 200 && response.code != 206 && !response.isSuccessful -> {
+                    throw Exception(
+                        getString(R.string.error_download_failed, response.code.toString()),
+                    )
+                }
+            }
+
+            // 206 Partial Content = the server honored the Range request.
+            val resuming = response.code == 206 && resumeFrom > 0
+            if (!resuming && resumeFrom > 0) {
+                // Server ignored the Range header; restart from scratch.
+                destFile.delete()
             }
 
             val body = response.body ?: throw Exception("Response body is null")
-            val totalBytes = body.contentLength()
-            var downloadedBytes = 0L
+            val totalBytes = body.contentLength().takeIf { it > 0 }?.let {
+                if (resuming) it + resumeFrom else it
+            } ?: 0L
+            var downloadedBytes = if (resuming) resumeFrom else 0L
             var lastUpdateTime = 0L
 
-            java.io.BufferedOutputStream(FileOutputStream(destFile)).use { output ->
+            java.io.BufferedOutputStream(FileOutputStream(destFile, resuming)).use { output ->
                 body.byteStream().buffered().use { input ->
                     val buffer = ByteArray(32 * 1024)
                     var bytes: Int
@@ -236,7 +277,9 @@ class ModelDownloadService : Service() {
                         downloadedBytes += bytes
 
                         val currentTime = System.currentTimeMillis()
-                        if (currentTime - lastUpdateTime >= 500 || downloadedBytes == totalBytes) {
+                        if (currentTime - lastUpdateTime >= 500 ||
+                            (totalBytes > 0 && downloadedBytes == totalBytes)
+                        ) {
                             lastUpdateTime = currentTime
                             val progress = if (totalBytes > 0) {
                                 downloadedBytes.toFloat() / totalBytes
@@ -258,7 +301,8 @@ class ModelDownloadService : Service() {
             }
 
             // Guard against silently truncated downloads: a dropped connection
-            // ends the read loop without throwing, leaving a partial file.
+            // ends the read loop without throwing, leaving a partial file
+            // that the next attempt resumes from.
             if (totalBytes > 0 && downloadedBytes != totalBytes) {
                 throw Exception(
                     getString(R.string.error_download_failed, "$downloadedBytes/$totalBytes"),

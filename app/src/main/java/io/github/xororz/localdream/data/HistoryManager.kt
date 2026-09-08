@@ -56,6 +56,7 @@ data class HistoryItem(
                     useOpenCL = e.useOpenCL,
                     scheduler = e.scheduler,
                     mode = mode,
+                    nsfwScore = e.nsfwScore,
                 ),
             )
         }
@@ -129,6 +130,7 @@ class HistoryManager(private val context: Context) {
                 scheduler = params.scheduler,
                 runOnCpu = params.runOnCpu,
                 useOpenCL = params.useOpenCL,
+                nsfwScore = params.nsfwScore,
             )
             val id = dao.insert(entity)
             HistoryItem.fromEntity(filesDir, entity.copy(id = id))
@@ -247,6 +249,11 @@ class HistoryManager(private val context: Context) {
 
     // Move a model's history (image files + DB rows) to a new id. The DB path
     // rewrite mirrors the directory move so saved thumbnails keep resolving.
+    // Files are moved first, defensively: renames never silently overwrite an
+    // existing target (a plain rename(2) would destroy the destination's
+    // same-named image), each move has a copy+delete fallback, and a failed
+    // move aborts before any DB row is touched so rows keep pointing at
+    // existing files.
     suspend fun renameModel(oldId: String, newId: String): Boolean = withContext(Dispatchers.IO) {
         try {
             val oldDir = File(filesDir, "history/$oldId")
@@ -254,12 +261,35 @@ class HistoryManager(private val context: Context) {
                 val newDir = File(filesDir, "history/$newId")
                 newDir.parentFile?.mkdirs()
                 if (newDir.exists()) {
+                    // Target dir exists: move file by file with collision-safe
+                    // names instead of letting rename(2) overwrite.
                     oldDir.listFiles()?.forEach { file ->
-                        file.renameTo(File(newDir, file.name))
+                        val movedTo = nonCollidingTarget(newDir, file)
+                        if (!file.renameTo(movedTo)) {
+                            // Same-volume rename can still fail (open handle,
+                            // permissions); fall back to copy+delete.
+                            if (!file.copyTo(movedTo, overwrite = false)) {
+                                Log.e(
+                                    "HistoryManager",
+                                    "Failed to move ${file.name} to ${movedTo.name}; aborting rename",
+                                )
+                                return@withContext false
+                            }
+                            file.delete()
+                        }
                     }
+                    // Only removes the dir if empty; leftovers stay inspectable.
                     oldDir.delete()
                 } else {
-                    oldDir.renameTo(newDir)
+                    if (!oldDir.renameTo(newDir)) {
+                        // Cross-filesystem or lock-related failure: copy the
+                        // whole tree instead.
+                        if (!oldDir.copyRecursively(newDir, overwrite = false)) {
+                            Log.e("HistoryManager", "Failed to copy history dir $oldId -> $newId")
+                            return@withContext false
+                        }
+                        oldDir.deleteRecursively()
+                    }
                 }
             }
             dao.renameModelId(oldId, newId)
@@ -267,6 +297,19 @@ class HistoryManager(private val context: Context) {
         } catch (e: Exception) {
             Log.e("HistoryManager", "Failed to rename model history", e)
             false
+        }
+    }
+
+    // Picks a target file in [dir] that doesn't exist yet: the same name when
+    // free, otherwise name_1.ext, name_2.ext, ... so nothing gets overwritten.
+    private fun nonCollidingTarget(dir: File, file: File): File {
+        val target = File(dir, file.name)
+        if (!target.exists()) return target
+        var i = 1
+        while (true) {
+            val candidate = File(dir, "${file.nameWithoutExtension}_$i.${file.extension}")
+            if (!candidate.exists()) return candidate
+            i++
         }
     }
 

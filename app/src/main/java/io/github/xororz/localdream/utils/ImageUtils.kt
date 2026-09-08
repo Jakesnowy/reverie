@@ -11,6 +11,7 @@ import android.provider.MediaStore
 import android.util.Log
 import io.github.xororz.localdream.R
 import io.github.xororz.localdream.data.Model
+import io.github.xororz.localdream.remote.RemoteProtocol
 import io.github.xororz.localdream.service.BackgroundGenerationService
 import io.github.xororz.localdream.ui.screens.GenerationParameters
 import java.io.ByteArrayOutputStream
@@ -76,6 +77,7 @@ suspend fun performUpscale(
     upscalerId: String,
     targetScale: Int = UPSCALER_NATIVE_SCALE,
     backendHost: String = BackgroundGenerationService.LOCAL_BACKEND_HOST,
+    authToken: String? = null,
     remoteUpscalerPath: String? = null,
 ): Bitmap = withContext(Dispatchers.IO) {
     val totalStartTime = System.currentTimeMillis()
@@ -114,6 +116,11 @@ suspend fun performUpscale(
         .header("X-Image-Width", width.toString())
         .header("X-Image-Height", height.toString())
         .header("X-Upscaler-Path", upscalerPath)
+        .apply {
+            authToken?.let {
+                header(RemoteProtocol.HEADER_AUTH, RemoteProtocol.bearer(it))
+            }
+        }
         .post(rgbBytes.toRequestBody("application/octet-stream".toMediaTypeOrNull()))
         .build()
 
@@ -206,6 +213,7 @@ suspend fun reportImage(
                         put("size", "${params.width}x${params.height}")
                         put("run_on_cpu", params.runOnCpu)
                         put("generation_time", params.generationTime ?: JSONObject.NULL)
+                        params.nsfwScore?.let { put("nsfw_score", it.toDouble()) }
                     },
                 )
                 put("image_data", base64Image)

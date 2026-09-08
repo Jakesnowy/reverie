@@ -8,6 +8,7 @@ import androidx.core.app.NotificationCompat
 import io.github.xororz.localdream.BuildConfig
 import io.github.xororz.localdream.R
 import io.github.xororz.localdream.data.Model
+import io.github.xororz.localdream.remote.RemoteProtocol
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.Executors
@@ -327,6 +328,18 @@ class BackendService : Service() {
             .build()
     }
 
+    // Asset length via openFd (the declared uncompressed size) with an
+    // available() fallback for compressed assets, where available() is only
+    // an approximation but the best cheap check available.
+    private fun assetSize(assetPath: String): Long = try {
+        assets.openFd(assetPath).use { fd ->
+            fd.length.takeIf { it > 0 }
+                ?: assets.open(assetPath).use { it.available().toLong() }
+        }
+    } catch (_: IOException) {
+        assets.open(assetPath).use { it.available().toLong() }
+    }
+
     private fun prepareRuntimeDir() {
         try {
             runtimeDir = File(filesDir, RUNTIME_DIR).apply {
@@ -342,9 +355,7 @@ class BackendService : Service() {
 
                     val needsCopy = !targetLib.exists() ||
                         run {
-                            val assetInputStream = assets.open("qnnlibs/$fileName")
-                            val assetSize = assetInputStream.use { it.available().toLong() }
-                            targetLib.length() != assetSize
+                            targetLib.length() != assetSize("qnnlibs/$fileName")
                         }
 
                     if (needsCopy) {
@@ -369,8 +380,7 @@ class BackendService : Service() {
             if (BuildConfig.FLAVOR == "filter") {
                 try {
                     val safetyCheckerTarget = File(filesDir, "safety_checker.mnn")
-                    val assetSize = assets.open("safety_checker.mnn")
-                        .use { it.available().toLong() }
+                    val assetSize = assetSize("safety_checker.mnn")
 
                     if (!safetyCheckerTarget.exists() ||
                         safetyCheckerTarget.length() != assetSize
@@ -445,7 +455,9 @@ class BackendService : Service() {
                     "--lib_dir",
                     runtimeDir.absolutePath,
                     "--port",
-                    "8081",
+                    RemoteProtocol.GENERATION_PORT.toString(),
+                    "--models_root",
+                    Model.getModelsDir(this).absolutePath,
                 )
             } else {
                 mutableListOf(
@@ -455,7 +467,9 @@ class BackendService : Service() {
                     "--model_dir",
                     modelsDir.absolutePath,
                     "--port",
-                    "8081",
+                    RemoteProtocol.GENERATION_PORT.toString(),
+                    "--models_root",
+                    Model.getModelsDir(this).absolutePath,
                 )
             }
             if (backendType != "sd15cpu" && backendType != BACKEND_TYPE_UPSCALER) {
@@ -513,6 +527,11 @@ class BackendService : Service() {
             }
             if (listenOnAll) {
                 command += "--listen_all"
+                // Host mode exposes the native port to the LAN; require the
+                // pairing token RemoteHostService displays on every request.
+                if (RemoteHostService.isRunning.value) {
+                    command += listOf("--auth_token", RemoteHostService.pairingToken(this))
+                }
             }
             val env = mutableMapOf<String, String>()
 
@@ -638,6 +657,12 @@ class BackendService : Service() {
 
                 if (!proc.waitFor(5, TimeUnit.SECONDS)) {
                     proc.destroyForcibly()
+                    // destroyForcibly() returns without guaranteeing the
+                    // process has died; wait so exitValue() below can't race
+                    // the teardown and throw IllegalStateException.
+                    if (!proc.waitFor(2, TimeUnit.SECONDS)) {
+                        Log.w(TAG, "backend process did not exit after destroyForcibly()")
+                    }
                 }
 
                 Log.i(TAG, "process end, code: ${proc.exitValue()}")

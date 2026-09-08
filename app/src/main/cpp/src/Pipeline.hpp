@@ -1233,6 +1233,11 @@ inline GenerationResult Pipeline::generate(
     int final_height = req.height;
 
     // --- Safety Checker ---
+    // Only runs in the with_filter build (a safety checker is loaded). The
+    // score is carried on the result so the app can surface it in the image
+    // properties; logging it here is fine because this code never executes in
+    // the basic build.
+    float nsfw_score = -1.0f;
     if (safety_interpreter_) {
       auto safety_start = std::chrono::high_resolution_clock::now();
       float score = 0.0f;
@@ -1240,6 +1245,7 @@ inline GenerationResult Pipeline::generate(
       if (safety_check(out_data, req.width, req.height, score,
                        safety_interpreter_, safety_session_)) {
         std::cout << "NSFW Score: " << score << std::endl;
+        nsfw_score = score;
         if (score > nsfw_threshold_) {
           QNN_WARN("NSFW detected (%.2f>%.2f).", score, nsfw_threshold_);
           std::fill(out_data.begin(), out_data.end(), 255);
@@ -1269,7 +1275,8 @@ inline GenerationResult Pipeline::generate(
                             final_height,
                             3,
                             static_cast<int>(total_time),
-                            first_step_time_ms};
+                            first_step_time_ms,
+                            nsfw_score};
   } catch (const std::exception &e) {
     QNN_ERROR("Image generation error: %s", e.what());
     throw;

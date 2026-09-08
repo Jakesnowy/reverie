@@ -20,6 +20,8 @@ import org.json.JSONObject
 class RemoteApiClient(
     val host: String,
     val port: Int = RemoteProtocol.CONTROL_PORT,
+    // Host-mode pairing token; sent with every request when configured.
+    val token: String? = null,
 ) {
     private val baseUrl = "http://$host:$port"
 
@@ -79,15 +81,22 @@ class RemoteApiClient(
         runCatching {
             val request = Request.Builder()
                 .url("http://$generationHost/health")
+                .auth()
                 .get()
                 .build()
             client.newCall(request).execute().use { it.isSuccessful }
         }.getOrDefault(false)
     }
 
+    // Attaches the pairing token when one was configured.
+    private fun Request.Builder.auth(): Request.Builder = apply {
+        token?.let { header(RemoteProtocol.HEADER_AUTH, RemoteProtocol.bearer(it)) }
+    }
+
     private fun get(path: String): JSONObject? {
         val request = Request.Builder()
             .url(baseUrl + path)
+            .auth()
             .get()
             .build()
         return execute(request)
@@ -96,6 +105,7 @@ class RemoteApiClient(
     private fun post(path: String, body: JSONObject): JSONObject? {
         val request = Request.Builder()
             .url(baseUrl + path)
+            .auth()
             .post(body.toString().toRequestBody("application/json".toMediaTypeOrNull()))
             .build()
         return execute(request)
