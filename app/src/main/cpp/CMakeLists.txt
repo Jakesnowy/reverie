@@ -4,8 +4,8 @@ project(libstable_diffusion_core.so C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# QNN SDK PATH
-set(QNN_SDK_ROOT /data/qairt/2.39.0.250926)
+# QNN SDK PATH (overridable: -DQNN_SDK_ROOT=/path/to/qairt)
+set(QNN_SDK_ROOT /data/qairt/2.39.0.250926 CACHE PATH "Path to Qualcomm AI Engine Direct (QAIRT) SDK")
 
 file(COPY ${QNN_SDK_ROOT}/examples/QNN/SampleApp/SampleApp/
     DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/SampleApp)
