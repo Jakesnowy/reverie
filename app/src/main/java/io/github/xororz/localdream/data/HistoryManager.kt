@@ -14,6 +14,7 @@ import io.github.xororz.localdream.data.db.HistoryEntity
 import io.github.xororz.localdream.ui.screens.GenerationParameters
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -267,12 +268,23 @@ class HistoryManager(private val context: Context) {
                         val movedTo = nonCollidingTarget(newDir, file)
                         if (!file.renameTo(movedTo)) {
                             // Same-volume rename can still fail (open handle,
-                            // permissions); fall back to copy+delete.
-                            if (!file.copyTo(movedTo, overwrite = false)) {
+                            // permissions); fall back to copy+delete. File.copyTo
+                            // reports failure by throwing, not by returning false,
+                            // so translate that into the boolean the abort path
+                            // below expects.
+                            val copied = try {
+                                file.copyTo(movedTo, overwrite = false)
+                                true
+                            } catch (e: IOException) {
                                 Log.e(
                                     "HistoryManager",
-                                    "Failed to move ${file.name} to ${movedTo.name}; aborting rename",
+                                    "Failed to copy ${file.name} to ${movedTo.name}: ${e.message}",
                                 )
+                                false
+                            }
+                            if (!copied) {
+                                // A failed move aborts before any DB row is
+                                // touched so rows keep pointing at existing files.
                                 return@withContext false
                             }
                             file.delete()
