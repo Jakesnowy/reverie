@@ -35,3 +35,7 @@ Commit_2.md
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Code review working documents (not for public repo)
+codereview.md
+codereview_audit.md
