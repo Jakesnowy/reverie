@@ -37,8 +37,17 @@ if not defined ANDROID_CMAKE set "ANDROID_CMAKE=cmake"
 if defined ANDROID_CMAKE_DIR set "PATH=!ANDROID_CMAKE_DIR!\bin;%PATH%"
 
 REM --- Android NDK ---------------------------------------------------------
+REM Prefer r28: engines built with NDK r29 compile fine but throw
+REM std::bad_alloc at generation start on device (verified on Snapdragon
+REM 8 Gen 3, SD1.5 + SDXL NPU). r28 matches the upstream Linux toolchain.
+REM Both install layouts are covered: standalone folder and sdkmanager.
+if not defined ANDROID_NDK_ROOT (
+    for /d %%D in ("C:\Android\ndk\android-ndk-r28*") do set "ANDROID_NDK_ROOT=%%~fD"
+    if not defined ANDROID_NDK_ROOT for /d %%D in ("C:\Android\Sdk\ndk\28.*") do set "ANDROID_NDK_ROOT=%%~fD"
+)
 if not defined ANDROID_NDK_ROOT (
     for /d %%D in ("C:\Android\ndk\android-ndk-*") do set "ANDROID_NDK_ROOT=%%~fD"
+    if not defined ANDROID_NDK_ROOT for /d %%D in ("C:\Android\Sdk\ndk\*") do set "ANDROID_NDK_ROOT=%%~fD"
 )
 if not defined ANDROID_NDK_ROOT (
     echo [ERROR] Android NDK not found. Set ANDROID_NDK_ROOT, e.g.
