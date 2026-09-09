@@ -1,6 +1,15 @@
 cmake_minimum_required(VERSION 3.18)
 project(libstable_diffusion_core.so C CXX)
 
+# Optional compiler cache: use ccache when available, build cleanly when not.
+# (The CMake presets no longer force it, so Windows machines without ccache work as-is.)
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    message(STATUS "Using ccache: ${CCACHE_PROGRAM}")
+    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -9,7 +18,7 @@ set(QNN_SDK_ROOT /data/qairt/2.39.0.250926 CACHE PATH "Path to Qualcomm AI Engin
 
 file(COPY ${QNN_SDK_ROOT}/examples/QNN/SampleApp/SampleApp/
     DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/SampleApp)
-execute_process(COMMAND git apply --directory=app/src/main/cpp/ --verbose ${CMAKE_CURRENT_SOURCE_DIR}/SampleApp.patch
+execute_process(COMMAND git apply --directory=app/src/main/cpp/ --ignore-whitespace --verbose ${CMAKE_CURRENT_SOURCE_DIR}/SampleApp.patch
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     RESULT_VARIABLE patch_result
     OUTPUT_VARIABLE patch_output
