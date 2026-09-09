@@ -11,7 +11,12 @@
 - **Inference backends:** Qualcomm QNN (NPU), MNN (CPU/OpenCL)
 - **Support libs (C++):** cpp-httplib (local HTTP server), tokenizers-cpp, xtensor/xsimd (tensor math), stb (images), zstd (model decompression), nlohmann/json
 - **Support libs (Kotlin):** OkHttp, Coil, Room (DB), KSP, ktlint + detekt
-- **Build:** Gradle with version catalog; JDK 17; `minSdk 28`, `targetSdk 36`; two product flavors — **`basic`** and **`filter`** (adds content filtering). Native build requires the QNN SDK at `/data/qairt/2.39.0.250926` (hardcoded in `CMakeLists.txt`), which patches Qualcomm's SampleApp and links the Hexagon stub/skel libs.
+- **Build:** Gradle with version catalog; Java 17 target (build with **JDK 21** — newer JDKs break AGP's `JdkImageTransform`); `minSdk 28`, `targetSdk 36`; two product flavors — **`basic`** and **`filter`** (adds content filtering). **Debug builds install alongside release builds** (`applicationIdSuffix = ".debug"`, launcher label "Local Dream Debug").
+- **Native engine:** requires the Qualcomm QAIRT (QNN) SDK 2.39.0.250926 — its path is overridable (`-DQNN_SDK_ROOT=...`); the build patches Qualcomm's SampleApp in-tree and links the Hexagon stub/skel libs.
+  - **Linux:** `app/src/main/cpp/build.sh` (CMake presets; NDK r28 at `/data/android-ndk-r28`; ccache optional — auto-detected).
+  - **Windows:** `app/src/main/cpp/build.bat` (self-configuring: override `ANDROID_NDK_ROOT` / `QAIRT_SDK_ROOT` / `ANDROID_SDK_ROOT` / `ANDROID_CMAKE`, otherwise auto-detected; uses the SDK's bundled CMake ≥3.31 and prefers **NDK r28**).
+  - **Use NDK r28, not r29:** engines built with r29 compile cleanly but throw `std::bad_alloc` at generation start on device (verified on Snapdragon 8 Gen 3, SD1.5 + SDXL NPU); r28 matches the upstream toolchain and works.
+  - After building, the script installs the engine into `app/src/main/jniLibs/arm64-v8a/` and the QNN runtime libs into `app/src/main/assets/qnnlibs/` for the Gradle build to package (arm64-v8a only).
 - Run via `./gradlew` (there are `build.sh`/`build.bat` helpers in `app/src/main/cpp`).
 
 ## 3. Architecture — the key insight
