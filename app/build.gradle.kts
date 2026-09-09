@@ -76,6 +76,12 @@ android {
         }
         debug {
 //            signingConfig = signingConfigs.getByName("release")
+            // Local test builds install alongside the official release:
+            // distinct applicationId, version suffix, and launcher label
+            // (label override lives in src/debug/res). Release builds are
+            // untouched.
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
         }
     }
     compileOptions {

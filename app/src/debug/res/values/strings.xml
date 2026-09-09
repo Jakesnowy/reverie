@@ -1,0 +1,6 @@
+<resources>
+    <!-- Debug builds only: distinguishes local test installs from the
+         official release in the launcher (applicationId also gets a
+         .debug suffix, see build.gradle.kts). -->
+    <string name="app_name">Local Dream Debug</string>
+</resources>
