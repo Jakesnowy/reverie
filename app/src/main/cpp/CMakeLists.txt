@@ -70,7 +70,9 @@ file(COPY ${QNN_SDK_ROOT}/lib/hexagon-v81/unsigned/libQnnHtpV81.so
 file(COPY ${QNN_SDK_ROOT}/lib/hexagon-v81/unsigned/libQnnHtpV81Skel.so
     DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/qnnlibs)
 
-if(WIN32)
+# Host toolchain prebuilt: note WIN32 is FALSE when cross-compiling for
+# Android (it reflects the target system), so branch on the host system name.
+if(CMAKE_HOST_SYSTEM_NAME MATCHES "Windows")
     set(PLATFORM_NAME "windows")
     set(HOST_TAG "windows-x86_64")
 else()
