@@ -9,7 +9,10 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import io.github.xororz.localdream.R
+import io.github.xororz.localdream.data.DownloadPin
+import io.github.xororz.localdream.data.GenerationPreferences
 import io.github.xororz.localdream.data.Model
+import io.github.xororz.localdream.utils.DownloadIntegrity
 import io.github.xororz.localdream.utils.Http
 import java.io.File
 import java.io.FileOutputStream
@@ -38,6 +41,8 @@ class ModelDownloadService : Service() {
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
+
+    private val generationPreferences by lazy { GenerationPreferences(this) }
 
     companion object {
         private const val TAG = "ModelDownloadService"
@@ -226,11 +231,24 @@ class ModelDownloadService : Service() {
         modelId: String,
         modelName: String,
     ): Unit = withContext(Dispatchers.IO) {
-        // Resume support: keep the partial file between attempts and ask the
-        // server for the remaining bytes. destFile has a deterministic name
-        // (see startDownload) so the partial file from a previous attempt is
-        // still there after a failure or cancel.
-        val resumeFrom = if (destFile.exists()) destFile.length() else 0L
+        // Integrity (utils/DownloadIntegrity + the design notes): HF sources
+        // publish the authoritative SHA-256 + size via the resolve response
+        // headers; other sources fall back to a TOFU pin from the first
+        // successful install. Either way the assembled archive must match
+        // before it is extracted, so a resume splice, upstream drift or MITM
+        // cannot install corrupted weights.
+        val authoritative = DownloadIntegrity.probeExpected(client, url)
+        val pin = generationPreferences.getDownloadPin(url)
+        val expected = authoritative
+            ?: pin?.let { DownloadIntegrity.Expected(it.sha256, it.size) }
+
+        var resumeFrom = if (destFile.exists()) destFile.length() else 0L
+        // A partial larger than the expected archive can never be right
+        // (changed upstream file or a stale pin): discard and restart.
+        if (expected != null && resumeFrom > expected.size) {
+            destFile.delete()
+            resumeFrom = 0L
+        }
         val request = Request.Builder()
             .url(url)
             .apply {
@@ -261,11 +279,26 @@ class ModelDownloadService : Service() {
             }
 
             val body = response.body ?: throw Exception("Response body is null")
-            val totalBytes = body.contentLength().takeIf { it > 0 }?.let {
-                if (resuming) it + resumeFrom else it
-            } ?: 0L
+            val contentLength = body.contentLength().takeIf { it > 0 }
+            val totalBytes = when {
+                contentLength != null && resuming -> contentLength + resumeFrom
+                contentLength != null -> contentLength
+                expected != null -> expected.size
+                else -> 0L
+            }
+            // Exact expected size: reject a mismatch before transferring
+            // anything - a server that swapped the archive underneath a
+            // resume would otherwise waste the transfer and fail the digest
+            // check afterwards anyway.
+            if (expected != null && totalBytes > 0 && totalBytes != expected.size) {
+                destFile.delete()
+                throw DownloadIntegrity.IntegrityException(
+                    getString(R.string.error_integrity_failed),
+                )
+            }
             var downloadedBytes = if (resuming) resumeFrom else 0L
             var lastUpdateTime = 0L
+            val digest = DownloadIntegrity.newDigest()
 
             java.io.BufferedOutputStream(FileOutputStream(destFile, resuming)).use { output ->
                 body.byteStream().buffered().use { input ->
@@ -274,11 +307,12 @@ class ModelDownloadService : Service() {
 
                     while (input.read(buffer).also { bytes = it } != -1) {
                         output.write(buffer, 0, bytes)
+                        digest.update(buffer, 0, bytes)
                         downloadedBytes += bytes
 
                         val currentTime = System.currentTimeMillis()
                         if (currentTime - lastUpdateTime >= 500 ||
-                            (totalBytes > 0 && downloadedBytes == totalBytes)
+                            (totalBytes > 0 && downloadedBytes >= totalBytes)
                         ) {
                             lastUpdateTime = currentTime
                             val progress = if (totalBytes > 0) {
@@ -306,6 +340,25 @@ class ModelDownloadService : Service() {
             if (totalBytes > 0 && downloadedBytes != totalBytes) {
                 throw Exception(
                     getString(R.string.error_download_failed, "$downloadedBytes/$totalBytes"),
+                )
+            }
+
+            // Integrity: the assembled archive must match the authoritative
+            // hash (HF headers) or the recorded pin. A mismatch is never
+            // extracted - discard the partial so a retry starts clean.
+            val actualSha256 = DownloadIntegrity.toHex(digest)
+            if (expected != null && !actualSha256.equals(expected.sha256, ignoreCase = true)) {
+                destFile.delete()
+                throw DownloadIntegrity.IntegrityException(
+                    getString(R.string.error_integrity_failed),
+                )
+            }
+            if (authoritative == null) {
+                // No authoritative source for this URL: pin this successful
+                // download so future attempts and resumes are protected.
+                generationPreferences.saveDownloadPin(
+                    url,
+                    DownloadPin(size = downloadedBytes, sha256 = actualSha256),
                 )
             }
         }

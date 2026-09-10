@@ -1402,6 +1402,14 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                                     )
                                 }
                             }
+                            if (selectedSource == "custom") {
+                                Text(
+                                    stringResource(R.string.download_source_custom_warning),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.padding(top = 4.dp),
+                                )
+                            }
                         }
                     }
                     // Appearance (theme) section

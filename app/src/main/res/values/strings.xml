@@ -93,6 +93,7 @@
     <string name="source_huggingface">Hugging Face</string>
     <string name="source_hf_mirror">hf-mirror</string>
     <string name="source_custom">Custom</string>
+    <string name="download_source_custom_warning">Custom source: downloads cannot be verified against Hugging Face hashes; only interrupted-transfer protection applies.</string>
     <string name="downloaded">Downloaded</string>
     <string name="delete_success">Deleted</string>
     <string name="delete_failed">Error in deletion</string>
@@ -231,6 +232,7 @@
 
     <!-- Error Messages -->
     <string name="error_download_failed">Download failed: %s</string>
+    <string name="error_integrity_failed">Integrity check failed (SHA-256 mismatch). The download was discarded and will restart.</string>
     <string name="error_request_failed">Request failed: %s</string>
     <string name="unknown_error">unknown error</string>
 

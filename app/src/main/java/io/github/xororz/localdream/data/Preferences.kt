@@ -32,6 +32,7 @@ class GenerationPreferences(private val context: Context) {
 
     private val BASE_URL_KEY = stringPreferencesKey("base_url")
     private val SELECTED_SOURCE_KEY = stringPreferencesKey("selected_source")
+    private val DOWNLOAD_PINS_KEY = stringPreferencesKey("download_pins")
     private val SHARE_USE_BASE64_KEY = booleanPreferencesKey("share_use_base64")
     private val SHARE_CLEAR_CLIPBOARD_KEY =
         booleanPreferencesKey("share_clear_clipboard_on_import")
@@ -98,6 +99,41 @@ class GenerationPreferences(private val context: Context) {
     suspend fun saveBaseUrl(url: String) {
         context.dataStore.edit { preferences ->
             preferences[BASE_URL_KEY] = url
+        }
+    }
+
+    // Download integrity pins (TOFU): for sources that do not publish
+    // authoritative hashes (non-HF mirrors, non-LFS files), the size and
+    // digest of the first successful download are recorded per URL so later
+    // downloads/resumes can detect splices and upstream drift. Keyed by the
+    // full download URL.
+    suspend fun getDownloadPin(url: String): DownloadPin? = context.dataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            val json = runCatching {
+                org.json.JSONObject(preferences[DOWNLOAD_PINS_KEY] ?: "{}")
+            }.getOrNull()
+            val entry = json?.optJSONObject(url)
+            val size = entry?.optLong("size", -1L) ?: -1L
+            val sha256 = entry?.optString("sha256").orEmpty()
+            if (size > 0 && sha256.isNotEmpty()) DownloadPin(size, sha256) else null
+        }
+        .first()
+
+    suspend fun saveDownloadPin(url: String, pin: DownloadPin) {
+        context.dataStore.edit { preferences ->
+            val json = runCatching {
+                org.json.JSONObject(preferences[DOWNLOAD_PINS_KEY] ?: "{}")
+            }.getOrDefault(org.json.JSONObject())
+            json.put(
+                url,
+                org.json.JSONObject()
+                    .put("size", pin.size)
+                    .put("sha256", pin.sha256),
+            )
+            preferences[DOWNLOAD_PINS_KEY] = json.toString()
         }
     }
 
@@ -254,4 +290,13 @@ data class GenerationPrefs(
     val batchCounts: Int = GenerationDefaults.GLOBAL.batchCounts,
     val scheduler: String = GenerationDefaults.GLOBAL.scheduler,
     val aspectRatio: String = GenerationDefaults.GLOBAL.aspectRatio,
+)
+
+/**
+ * TOFU integrity pin for a downloaded archive: recorded after the first
+ * successful install of a URL whose source publishes no authoritative hash.
+ */
+data class DownloadPin(
+    val size: Long,
+    val sha256: String,
 )
