@@ -346,7 +346,25 @@ class ModelDownloadService : Service() {
             // Integrity: the assembled archive must match the authoritative
             // hash (HF headers) or the recorded pin. A mismatch is never
             // extracted - discard the partial so a retry starts clean.
-            val actualSha256 = DownloadIntegrity.toHex(digest)
+            // On a resumed download the incremental digest only covers this
+            // session's tail bytes, so re-hash the assembled file from disk
+            // to compare against the whole-archive expectation. (Also keeps
+            // the TOFU pin below a true full-file hash: a tail-only pin would
+            // poison every future download of this URL.)
+            val actualSha256 = if (resuming) {
+                val fullDigest = DownloadIntegrity.newDigest()
+                destFile.inputStream().buffered().use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buffer)
+                        if (n < 0) break
+                        fullDigest.update(buffer, 0, n)
+                    }
+                }
+                DownloadIntegrity.toHex(fullDigest)
+            } else {
+                DownloadIntegrity.toHex(digest)
+            }
             if (expected != null && !actualSha256.equals(expected.sha256, ignoreCase = true)) {
                 destFile.delete()
                 throw DownloadIntegrity.IntegrityException(
