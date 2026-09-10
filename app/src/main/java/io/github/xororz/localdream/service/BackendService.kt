@@ -328,16 +328,41 @@ class BackendService : Service() {
             .build()
     }
 
-    // Asset length via openFd (the declared uncompressed size) with an
-    // available() fallback for compressed assets, where available() is only
-    // an approximation but the best cheap check available.
+    // Asset length via openFd (the declared uncompressed size, only works for
+    // stored/uncompressed entries) with an exact fallback for deflated
+    // entries: the APK central directory records the true uncompressed size.
+    // available() is the last resort only — on some platform versions it
+    // reports the compressed size, which would force a re-copy on every
+    // backend start.
     private fun assetSize(assetPath: String): Long = try {
         assets.openFd(assetPath).use { fd ->
             fd.length.takeIf { it > 0 }
+                ?: apkAssetSize(assetPath)
                 ?: assets.open(assetPath).use { it.available().toLong() }
         }
     } catch (_: IOException) {
-        assets.open(assetPath).use { it.available().toLong() }
+        apkAssetSize(assetPath)
+            ?: assets.open(assetPath).use { it.available().toLong() }
+    }
+
+    // Uncompressed size of an APK asset from the zip central directory. The
+    // app's assets always sit in the base APK, but split APKs are probed too
+    // for robustness. Null when the entry cannot be found/read.
+    private fun apkAssetSize(assetPath: String): Long? {
+        val entryName = "assets/$assetPath"
+        val apks = listOfNotNull(applicationInfo.sourceDir) +
+            (applicationInfo.splitSourceDirs ?: emptyArray())
+        for (apk in apks) {
+            val size = try {
+                java.util.zip.ZipFile(apk).use { zip ->
+                    zip.getEntry(entryName)?.size?.takeIf { it > 0 }
+                }
+            } catch (_: IOException) {
+                null
+            }
+            if (size != null) return size
+        }
+        return null
     }
 
     private fun prepareRuntimeDir() {
