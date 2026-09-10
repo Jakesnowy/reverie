@@ -59,6 +59,12 @@ jobs:
           java-version: 21
 
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          # The MNN submodule ships its own old gradle-wrapper.jar, which the
+          # default wrapper validation rejects; the root wrapper is already
+          # validated in the lint-and-build job (which checks out without
+          # submodules).
+          validate-wrappers: false
 
       # Rust for tokenizers-cpp; 1.85 because newer rustc denies
       # dangerous_implicit_autorefs, which breaks tokenizers-c.
