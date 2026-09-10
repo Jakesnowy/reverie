@@ -73,9 +73,7 @@ internal suspend fun tokenizePromptRequest(
         val request = Request.Builder()
             .url("http://$backendHost/tokenize")
             .apply {
-                authToken?.let {
-                    header(RemoteProtocol.HEADER_AUTH, RemoteProtocol.bearer(it))
-                }
+                authToken?.let { RemoteProtocol.addAuth(this, it) }
             }
             .post(body)
             .build()

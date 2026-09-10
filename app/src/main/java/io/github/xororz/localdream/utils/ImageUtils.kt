@@ -117,9 +117,7 @@ suspend fun performUpscale(
         .header("X-Image-Height", height.toString())
         .header("X-Upscaler-Path", upscalerPath)
         .apply {
-            authToken?.let {
-                header(RemoteProtocol.HEADER_AUTH, RemoteProtocol.bearer(it))
-            }
+            authToken?.let { RemoteProtocol.addAuth(this, it) }
         }
         .post(rgbBytes.toRequestBody("application/octet-stream".toMediaTypeOrNull()))
         .build()

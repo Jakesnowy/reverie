@@ -322,9 +322,7 @@ class BackgroundGenerationService : Service() {
             val request = Request.Builder()
                 .url("http://$backendHost/generate")
                 .apply {
-                    authToken?.let {
-                        header(RemoteProtocol.HEADER_AUTH, RemoteProtocol.bearer(it))
-                    }
+                    authToken?.let { RemoteProtocol.addAuth(this, it) }
                 }
                 .post(jsonObject.toString().toRequestBody("application/json".toMediaTypeOrNull()))
                 .build()

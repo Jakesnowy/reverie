@@ -61,7 +61,8 @@ struct ServerOptions {
   // When set, /upscale only accepts X-Upscaler-Path values resolving under
   // this directory (defeats arbitrary native-parser input on the LAN).
   std::string models_root;
-  // When set, every endpoint requires this pairing token (X-LD-Auth header).
+  // When set, every endpoint requires this pairing token (Authorization or
+  // legacy X-LD-Auth header).
   std::string auth_token;
   float nsfw_threshold = 0.5f;
   bool use_v_pred = false;
@@ -105,7 +106,8 @@ static void showHelp() {
          "\n"
          "Options:\n"
          "  --port <n>             HTTP port (default 8081)\n"
-         "  --auth_token <t>       Require token via X-LD-Auth header\n"
+         "  --auth_token <t>       Require token via Authorization (or legacy\n"
+         "                         X-LD-Auth) header\n"
          "  --listen_all           Listen on 0.0.0.0 instead of 127.0.0.1\n"
          "  --no_img2img           Do not load the VAE encoder\n"
          "  --use_v_pred           v-prediction model\n"
@@ -410,10 +412,13 @@ static std::string g_models_root;
 static std::string g_auth_token;
 
 // True when the request presents the required pairing token. A no-op when no
-// token was configured (plain local loopback mode).
+// token was configured (plain local loopback mode). Accepts the canonical
+// "Authorization" header the controller app sends, plus the legacy
+// "X-LD-Auth" header for older controllers.
 static bool requestAuthorized(const httplib::Request &req) {
   if (g_auth_token.empty()) return true;
-  std::string presented = req.get_header_value("X-LD-Auth");
+  std::string presented = req.get_header_value("Authorization");
+  if (presented.empty()) presented = req.get_header_value("X-LD-Auth");
   if (presented.rfind("Bearer ", 0) == 0) presented = presented.substr(7);
   // Constant-time comparison: never leak where the first differing byte is.
   // (Only the token length is exposed by the early size check, and the token

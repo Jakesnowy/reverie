@@ -36,12 +36,26 @@ object RemoteProtocol {
     const val STATE_RUNNING = "running"
     const val STATE_ERROR = "error"
 
-    // Pairing-token auth header. Both the control API and the native
-    // generation port expect "Bearer <token>" (the engine also accepts a
-    // bare X-LD-Auth header).
+    // Pairing-token auth header. The control API (RemoteHostServer) and the
+    // native generation port both accept "Authorization: Bearer <token>".
+    // The engine also accepts a bare legacy X-LD-Auth header; use addAuth()
+    // for generation-port requests, which sends both so controllers keep
+    // working against hosts running older app versions.
     const val HEADER_AUTH = "Authorization"
+    const val LEGACY_HEADER_AUTH = "X-LD-Auth"
 
     fun bearer(token: String): String = "Bearer $token"
+
+    /**
+     * Adds the pairing token to a request. Sends both the canonical
+     * Authorization header and the legacy X-LD-Auth header: current engines
+     * accept either, but engines shipped before the Authorization support
+     * only read X-LD-Auth, and controller/host app versions can diverge.
+     */
+    fun addAuth(builder: okhttp3.Request.Builder, token: String) {
+        builder.header(HEADER_AUTH, bearer(token))
+        builder.header(LEGACY_HEADER_AUTH, bearer(token))
+    }
 }
 
 /** Identity block returned by GET /info (unauthenticated, used for discovery). */
