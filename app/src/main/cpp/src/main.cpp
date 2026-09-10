@@ -415,7 +415,15 @@ static bool requestAuthorized(const httplib::Request &req) {
   if (g_auth_token.empty()) return true;
   std::string presented = req.get_header_value("X-LD-Auth");
   if (presented.rfind("Bearer ", 0) == 0) presented = presented.substr(7);
-  return presented == g_auth_token;
+  // Constant-time comparison: never leak where the first differing byte is.
+  // (Only the token length is exposed by the early size check, and the token
+  // format is public knowledge anyway.)
+  if (presented.size() != g_auth_token.size()) return false;
+  volatile unsigned char diff = 0;
+  for (size_t i = 0; i < g_auth_token.size(); ++i)
+    diff |= static_cast<unsigned char>(presented[i]) ^
+            static_cast<unsigned char>(g_auth_token[i]);
+  return diff == 0;
 }
 
 static void respondUnauthorized(httplib::Response &res) {

@@ -90,6 +90,7 @@ fun RemoteScreen(navController: NavController, modifier: Modifier = Modifier) {
 
     val msgConnectedTo = stringResource(R.string.remote_connected_to)
     val msgUnreachable = stringResource(R.string.remote_connect_failed_unreachable)
+    val msgUnauthorized = stringResource(R.string.remote_connect_failed_unauthorized)
 
     var hostInput by remember { mutableStateOf("") }
     var tokenInput by remember { mutableStateOf("") }
@@ -348,6 +349,9 @@ fun RemoteScreen(navController: NavController, modifier: Modifier = Modifier) {
 
                                             is RemoteConnectResult.Unreachable ->
                                                 connectError = msgUnreachable
+
+                                            is RemoteConnectResult.Unauthorized ->
+                                                connectError = msgUnauthorized
                                         }
                                     }
                                 },

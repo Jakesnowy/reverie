@@ -23,6 +23,9 @@ class RemoteApiClient(
     // Host-mode pairing token; sent with every request when configured.
     val token: String? = null,
 ) {
+    /** The host rejected the pairing token (HTTP 401). */
+    class UnauthorizedException :
+        Exception("Host rejected the pairing token (401)")
     private val baseUrl = "http://$host:$port"
 
     /** host:port of the native backend on the host device. */
@@ -39,13 +42,22 @@ class RemoteApiClient(
     suspend fun fetchInfo(): RemoteHostInfo? = withContext(Dispatchers.IO) {
         runCatching {
             get(RemoteProtocol.PATH_INFO)?.let { RemoteHostInfo.fromJson(it) }
-        }.getOrNull()
+        }.getOrElse { exception ->
+            // A 401 must not be swallowed into null (which the caller maps to
+            // "unreachable"): surface it so the connect flow can say the
+            // pairing code was rejected.
+            if (exception is UnauthorizedException) throw exception
+            null
+        }
     }
 
     suspend fun fetchCatalog(): RemoteCatalog? = withContext(Dispatchers.IO) {
         runCatching {
             get(RemoteProtocol.PATH_MODELS)?.let { RemoteCatalog.fromJson(it) }
-        }.getOrNull()
+        }.getOrElse { exception ->
+            if (exception is UnauthorizedException) throw exception
+            null
+        }
     }
 
     suspend fun selectModel(modelId: String, width: Int, height: Int): Boolean = withContext(Dispatchers.IO) {
@@ -112,6 +124,9 @@ class RemoteApiClient(
     }
 
     private fun execute(request: Request): JSONObject? = client.newCall(request).execute().use { response ->
+        // Distinct from "unreachable" so the connect flow can point at the
+        // pairing code instead of the address.
+        if (response.code == 401) throw UnauthorizedException()
         if (!response.isSuccessful) return null
         val payload = response.body?.string() ?: return null
         runCatching { JSONObject(payload) }.getOrNull()

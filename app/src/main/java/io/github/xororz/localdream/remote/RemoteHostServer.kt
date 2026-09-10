@@ -7,6 +7,7 @@ import java.io.InputStream
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import org.json.JSONObject
@@ -172,9 +173,15 @@ class RemoteHostServer(
             return Response(200, handler.info())
         }
         // Pairing token gate: /info stays open for discovery, everything
-        // else requires the code shown on the host device.
+        // else requires the code shown on the host device. Compared in
+        // constant time so response timing cannot leak token bytes.
         val expected = authToken?.let { RemoteProtocol.bearer(it) }
-        if (expected != null && request.authHeader != expected) {
+        val presented = request.authHeader
+        val authorized = expected != null && presented != null && MessageDigest.isEqual(
+            presented.toByteArray(Charsets.UTF_8),
+            expected.toByteArray(Charsets.UTF_8),
+        )
+        if (expected != null && !authorized) {
             return Response(401, errorBody("unauthorized"))
         }
         return when {

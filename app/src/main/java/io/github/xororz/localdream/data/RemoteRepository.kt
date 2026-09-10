@@ -27,6 +27,9 @@ data class RemoteConnection(
 sealed class RemoteConnectResult {
     data class Success(val deviceName: String) : RemoteConnectResult()
     data object Unreachable : RemoteConnectResult()
+
+    /** The host answered but rejected the pairing code (HTTP 401). */
+    data object Unauthorized : RemoteConnectResult()
 }
 
 /**
@@ -127,8 +130,18 @@ class RemoteRepository private constructor(private val context: Context) {
         if (host.isEmpty()) return RemoteConnectResult.Unreachable
 
         val client = RemoteApiClient(host, port, token)
-        val info = client.fetchInfo() ?: return RemoteConnectResult.Unreachable
-        val catalog = client.fetchCatalog() ?: return RemoteConnectResult.Unreachable
+        // A 401 must reach the UI as "wrong pairing code", not as the same
+        // "cannot reach the host" message an unreachable address produces.
+        val info = try {
+            client.fetchInfo() ?: return RemoteConnectResult.Unreachable
+        } catch (e: RemoteApiClient.UnauthorizedException) {
+            return RemoteConnectResult.Unauthorized
+        }
+        val catalog = try {
+            client.fetchCatalog() ?: return RemoteConnectResult.Unreachable
+        } catch (e: RemoteApiClient.UnauthorizedException) {
+            return RemoteConnectResult.Unauthorized
+        }
 
         val name = info.deviceName.ifEmpty { host }
         connection = RemoteConnection(host, port, name, token)
@@ -148,7 +161,13 @@ class RemoteRepository private constructor(private val context: Context) {
         val client = client() ?: return false
         refreshing = true
         try {
-            val catalog = client.fetchCatalog()
+            val catalog = try {
+                client.fetchCatalog()
+            } catch (e: RemoteApiClient.UnauthorizedException) {
+                // Saved code no longer accepted (host reinstall): drop to
+                // offline rather than crash the caller.
+                null
+            }
             if (catalog == null) {
                 online = false
                 return false
