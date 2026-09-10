@@ -35,6 +35,19 @@ inline GenerationRequest parseGenerationRequest(const nlohmann::json &json,
   req.use_opencl = json.value("use_opencl", false);
   req.show_diffusion_process = json.value("show_diffusion_process", false);
   req.show_diffusion_stride = json.value("show_diffusion_stride", 1);
+  // --- Consolidated request limits ---------------------------------------
+  // These mirror the app's own UI ranges (GenerationDefaults.kt on the
+  // Kotlin side). The engine is authoritative: out-of-range values are
+  // rejected (not clamped) so an app/engine desync is observable, and so
+  // unauthenticated local clients can neither drive unbounded allocations
+  // nor crash the process. Keep in sync with GenerationDefaults.
+  if (req.steps < 1 || req.steps > 50)
+    throw std::invalid_argument("Invalid steps (1-50)");
+  // Comparison form also rejects NaN.
+  if (!(req.cfg >= 0.0f && req.cfg <= 30.0f))
+    throw std::invalid_argument("Invalid cfg (0-30)");
+  if (req.show_diffusion_stride < 1)
+    throw std::invalid_argument("Invalid show_diffusion_stride (>= 1)");
   req.seed = json.value(
       "seed", (unsigned)hashSeed(
                   std::chrono::system_clock::now().time_since_epoch().count()));
@@ -82,7 +95,21 @@ inline GenerationRequest parseGenerationRequest(const nlohmann::json &json,
     req.width = 1024;
     req.height = 1024;
   }
+  // Plain (non-ultrafix) SD1.5 sizes: the app only offers fixed presets up
+  // to 1024 (the NPU resolution patches); anything larger is reachable only
+  // through the ultrafix tile path, which validates its own bounds. Without
+  // this cap a request could drive unbounded latent allocations.
+  if (!sdxl && !anima && !req.ultrafix) {
+    if (req.width <= 0 || req.height <= 0 || req.width % 8 != 0 ||
+        req.height % 8 != 0)
+      throw std::invalid_argument(
+          "Invalid size: width/height must be positive multiples of 8");
+    if (req.width > 1024 || req.height > 1024)
+      throw std::invalid_argument("Invalid size (max 1024)");
+  }
   req.denoise_strength = json.value("denoise_strength", 0.6f);
+  if (!(req.denoise_strength >= 0.0f && req.denoise_strength <= 1.0f))
+    throw std::invalid_argument("Invalid denoise_strength (0-1)");
 
   auto sanitize_format = [](std::string f) {
     return (f == "jpeg" || f == "png") ? f : std::string("raw");

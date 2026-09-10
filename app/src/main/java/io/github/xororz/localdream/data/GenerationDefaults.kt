@@ -36,6 +36,22 @@ data class GenerationDefaults(
     companion object {
         val GLOBAL = GenerationDefaults()
 
+        // Slider/value ranges for user-facing generation parameters. Single
+        // source of truth on the Kotlin side: model config.json defaults are
+        // clamped to these (ModelConfig), the settings sliders use them, and
+        // parameter-share imports coerce into them. The native engine
+        // independently enforces the same limits (see
+        // app/src/main/cpp/src/RequestParser.hpp) — keep the two in sync.
+        const val STEPS_RANGE_MIN = 1f
+        const val STEPS_RANGE_MAX = 50f
+        val STEPS_RANGE = STEPS_RANGE_MIN..STEPS_RANGE_MAX
+        const val CFG_RANGE_MIN = 1f
+        const val CFG_RANGE_MAX = 30f
+        val CFG_RANGE = CFG_RANGE_MIN..CFG_RANGE_MAX
+        const val DENOISE_RANGE_MIN = 0f
+        const val DENOISE_RANGE_MAX = 1f
+        val DENOISE_RANGE = DENOISE_RANGE_MIN..DENOISE_RANGE_MAX
+
         // UltraFix slider bounds (kept here so the persistence layer and the
         // dialog agree on the clamp range). Denoise steps are additionally
         // capped at the current total step count at use time.

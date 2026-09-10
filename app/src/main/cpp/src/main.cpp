@@ -606,6 +606,11 @@ static void registerUpscaleEndpoint(httplib::Server &svr) {
 
       int original_width = std::stoi(req.get_header_value("X-Image-Width"));
       int original_height = std::stoi(req.get_header_value("X-Image-Height"));
+      // Bound before any size math: the byte-count check below would
+      // otherwise overflow int for large header values.
+      if (original_width <= 0 || original_height <= 0 ||
+          original_width > 8192 || original_height > 8192)
+        throw std::invalid_argument("Invalid image dimensions (1-8192)");
       std::string upscaler_path = req.get_header_value("X-Upscaler-Path");
 
       // Path allowlist: the weight file must be an .mnn/.bin file inside the
@@ -638,11 +643,13 @@ static void registerUpscaleEndpoint(httplib::Server &svr) {
 
       std::vector<uint8_t> image_data(req.body.begin(), req.body.end());
 
-      if (image_data.size() != (size_t)original_width * original_height * 3) {
+      const long long expected_bytes =
+          (long long)original_width * original_height * 3;
+      if (image_data.size() != (size_t)expected_bytes) {
         throw std::invalid_argument(
             "Image data size mismatch. Expected " +
-            std::to_string(original_width * original_height * 3) +
-            " bytes, got " + std::to_string(image_data.size()) + " bytes");
+            std::to_string(expected_bytes) + " bytes, got " +
+            std::to_string(image_data.size()) + " bytes");
       }
 
       // Pre-process: resize if shortest edge < 192.

@@ -3573,10 +3573,12 @@ fun ModelRunScreen(
                     imported.negativePrompt?.let { negativePromptField.replaceText(it) }
                 }
                 if (ParamShareField.STEPS in selectedFields) {
-                    imported.steps?.let { steps = it.toFloat() }
+                    imported.steps?.let {
+                        steps = it.toFloat().coerceIn(GenerationDefaults.STEPS_RANGE)
+                    }
                 }
                 if (ParamShareField.CFG in selectedFields) {
-                    imported.cfg?.let { cfg = it }
+                    imported.cfg?.let { cfg = it.coerceIn(GenerationDefaults.CFG_RANGE) }
                 }
                 if (ParamShareField.SEED in selectedFields) {
                     seed = imported.seed?.toString() ?: ""
@@ -3585,7 +3587,9 @@ fun ModelRunScreen(
                     imported.scheduler?.let { scheduler = it }
                 }
                 if (ParamShareField.DENOISE_STRENGTH in selectedFields) {
-                    imported.denoiseStrength?.let { denoiseStrength = it }
+                    imported.denoiseStrength?.let {
+                        denoiseStrength = it.coerceIn(GenerationDefaults.DENOISE_RANGE)
+                    }
                 }
                 saveAllFields()
                 if (clearClipboard) {

@@ -41,6 +41,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.xororz.localdream.R
+import io.github.xororz.localdream.data.GenerationDefaults
 import io.github.xororz.localdream.data.Resolution
 import kotlin.math.roundToInt
 
@@ -298,7 +299,7 @@ internal fun AdvancedSettingsDialog(
                     Slider(
                         value = steps,
                         onValueChange = onStepsChange,
-                        valueRange = 1f..50f,
+                        valueRange = GenerationDefaults.STEPS_RANGE,
                         steps = 48,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -312,7 +313,7 @@ internal fun AdvancedSettingsDialog(
                     Slider(
                         value = cfg,
                         onValueChange = onCfgChange,
-                        valueRange = 1f..30f,
+                        valueRange = GenerationDefaults.CFG_RANGE,
                         steps = 57,
                         modifier = Modifier.fillMaxWidth(),
                     )
