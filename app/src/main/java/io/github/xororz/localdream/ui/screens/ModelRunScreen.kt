@@ -1086,8 +1086,58 @@ fun ModelRunScreen(
                         val mutableOriginal =
                             originalBitmap.copy(Bitmap.Config.ARGB_8888, true)
 
-                        val rectW = snapshotCropRect!!.width()
-                        val rectH = snapshotCropRect!!.height()
+                        var rectW = snapshotCropRect!!.width()
+                        var rectH = snapshotCropRect!!.height()
+
+                        var finalLeft = snapshotCropRect!!.left
+                        var finalTop = snapshotCropRect!!.top
+
+                        // Convert 2dp rounding error margin to physical pixels based on device density
+                        val displayMetrics = context.resources.displayMetrics
+                        val density = displayMetrics.density
+                        val tolerance = (2f * density).roundToInt().coerceAtLeast(1)
+
+                        // Vertical axis adjustment (Top / Bottom)
+                        val matchesFullHeight = Math.abs(rectH - originalBitmap.height) <= tolerance
+
+                        if (matchesFullHeight) {
+                            // If the patch spans the full height, force it to take the EXACT
+                            // maximum height of the original image to prevent vertical compression.
+                            rectH = originalBitmap.height
+                            finalTop = 0
+                        } else {
+                            // Standard edge-snapping for localized vertical patches
+                            val isBottomEdge = snapshotCropRect!!.bottom >= (originalBitmap.height - tolerance)
+                            val isTopEdge = snapshotCropRect!!.top <= tolerance
+
+                            if (isBottomEdge) {
+                                finalTop = originalBitmap.height - rectH
+                            } else if (isTopEdge) {
+                                finalTop = 0
+                            }
+                        }
+
+                        // Horizontal axis adjustment (Left / Right)
+                        val matchesFullWidth = Math.abs(rectW - originalBitmap.width) <= tolerance
+
+                        if (matchesFullWidth) {
+                            // If the patch spans the full width, force it to take the EXACT
+                            // maximum width of the original image to prevent horizontal compression.
+                            rectW = originalBitmap.width
+                            finalLeft = 0
+                        } else {
+                            // Standard edge-snapping for localized horizontal patches
+                            val isRightEdge = snapshotCropRect!!.right >= (originalBitmap.width - tolerance)
+                            val isLeftEdge = snapshotCropRect!!.left <= tolerance
+
+                            if (isRightEdge) {
+                                finalLeft = originalBitmap.width - rectW
+                            } else if (isLeftEdge) {
+                                finalLeft = 0
+                            }
+                        }
+
+                        // Scale the patch to the mathematically corrected dimensions
                         val resizedPatch = bitmap.scale(rectW, rectH)
 
                         // Feather-blend along the mask instead of pasting the
@@ -1098,8 +1148,8 @@ fun ModelRunScreen(
                             target = mutableOriginal,
                             patch = resizedPatch,
                             mask = snapshotMaskBitmap,
-                            left = snapshotCropRect!!.left,
-                            top = snapshotCropRect!!.top,
+                            left = finalLeft,
+                            top = finalTop,
                         )
 
                         saveImage(
