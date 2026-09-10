@@ -22,12 +22,18 @@ import java.util.Base64
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import org.json.JSONObject
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 private val saveSequence = AtomicLong(0L)
 
@@ -53,6 +59,28 @@ private fun nextSaveFilename(extension: String): String {
     val ts = System.currentTimeMillis()
     val seq = saveSequence.getAndIncrement()
     return "generated_image_${ts}_$seq.$extension"
+}
+
+// OkHttp's blocking execute() never observes coroutine cancellation: a caller
+// leaving the upscaling screen (rememberCoroutineScope is cancelled on
+// navigation) would leave an IO thread parked for up to the client timeout
+// while the engine keeps tiling an orphaned request. The enqueue-based await
+// forwards cancellation to call.cancel(), which aborts the socket immediately.
+private suspend fun Call.await(): Response = suspendCancellableCoroutine { continuation ->
+    continuation.invokeOnCancellation { cancel() }
+    enqueue(
+        object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                // A no-op when the continuation was already cancelled by the
+                // same cancel() above.
+                continuation.resumeWithException(e)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                continuation.resume(response)
+            }
+        },
+    )
 }
 
 // The upscaler models are fixed 4x; smaller target scales are produced by
@@ -122,7 +150,7 @@ suspend fun performUpscale(
         .post(rgbBytes.toRequestBody("application/octet-stream".toMediaTypeOrNull()))
         .build()
 
-    upscaleClient.newCall(request).execute().use { response ->
+    upscaleClient.newCall(request).await().use { response ->
         if (!response.isSuccessful) {
             val errorBody = response.body?.string()
             throw Exception("Upscale failed with response code: ${response.code}, error: $errorBody")
