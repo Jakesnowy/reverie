@@ -11,7 +11,7 @@
 - **Inference backends:** Qualcomm QNN (NPU), MNN (CPU/OpenCL)
 - **Support libs (C++):** cpp-httplib (local HTTP server), tokenizers-cpp, xtensor/xsimd (tensor math), stb (images), zstd (model decompression), nlohmann/json
 - **Support libs (Kotlin):** OkHttp, Coil, Room (DB), KSP, ktlint + detekt
-- **Build:** Gradle with version catalog; Java 17 target (build with **JDK 21** — newer JDKs break AGP's `JdkImageTransform`); `minSdk 28`, `targetSdk 36`; two product flavors — **`basic`** and **`filter`** (adds content filtering). **Debug builds install alongside release builds** (`applicationIdSuffix = ".debug"`, launcher label "Local Dream Debug").
+- **Build:** Gradle with version catalog; Java 17 target (build with **JDK 21** — newer JDKs break AGP's `JdkImageTransform`); `minSdk 28`, `targetSdk 36`; two product flavors — **`basic`** and **`filter`** (adds content filtering). **Debug builds install alongside release builds** (`applicationIdSuffix = ".debug"`, launcher label "Local Dream Debug"). Kotlin compile, ktlint, detekt and an APK assembly run on every push/PR via the CI workflow (`.github/workflows/ci.yml`).
 - **Native engine:** requires the Qualcomm QAIRT (QNN) SDK 2.39.0.250926 — its path is overridable (`-DQNN_SDK_ROOT=...`); the build patches Qualcomm's SampleApp in-tree and links the Hexagon stub/skel libs.
   - **Linux:** `app/src/main/cpp/build.sh` (CMake presets; NDK r28 at `/data/android-ndk-r28`; ccache optional — auto-detected).
   - **Windows:** `app/src/main/cpp/build.bat` (self-configuring: override `ANDROID_NDK_ROOT` / `QAIRT_SDK_ROOT` / `ANDROID_SDK_ROOT` / `ANDROID_CMAKE`, otherwise auto-detected; uses the SDK's bundled CMake ≥3.31 and prefers **NDK r28**).
