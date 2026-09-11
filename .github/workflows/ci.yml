@@ -156,12 +156,12 @@ jobs:
         run: |
           if [ "$RELEASE_KIND" = "beta" ]; then
             # Monotonic versionCode so each beta upgrades over the previous
-            # one; RUN_NUMBER grows with every run of this workflow. Signing
-            # values arrive as env vars from the decode step and must be
-            # converted to -P properties here (findProperty does not read
+            # one; GITHUB_RUN_NUMBER grows with every run of this workflow.
+            # Signing values arrive as env vars from the decode step and must
+            # be converted to -P properties here (findProperty does not read
             # env vars).
             ./gradlew assembleBasicBeta assembleFilterBeta --stacktrace \
-              -POVERRIDE_VERSION_CODE=$((74 + RUN_NUMBER)) \
+              -POVERRIDE_VERSION_CODE=$((74 + GITHUB_RUN_NUMBER)) \
               -PBETA_STORE_FILE="$BETA_STORE_FILE" \
               -PBETA_STORE_PASSWORD="$BETA_STORE_PASSWORD" \
               -PBETA_KEY_ALIAS="$BETA_KEY_ALIAS" \
