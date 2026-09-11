@@ -258,6 +258,10 @@ class HistoryManager(private val context: Context) {
     suspend fun renameModel(oldId: String, newId: String): Boolean = withContext(Dispatchers.IO) {
         try {
             val oldDir = File(filesDir, "history/$oldId")
+            // Rows whose file got a non-colliding name (name_1.ext): the bulk
+            // prefix rewrite in renameModelId can't know those new names, so
+            // they get an exact imagePath correction afterwards.
+            val renamedPaths = mutableListOf<Pair<String, String>>()
             if (oldDir.exists()) {
                 val newDir = File(filesDir, "history/$newId")
                 newDir.parentFile?.mkdirs()
@@ -266,6 +270,10 @@ class HistoryManager(private val context: Context) {
                     // names instead of letting rename(2) overwrite.
                     oldDir.listFiles()?.forEach { file ->
                         val movedTo = nonCollidingTarget(newDir, file)
+                        if (movedTo.name != file.name) {
+                            renamedPaths += "history/$oldId/${file.name}" to
+                                "history/$newId/${movedTo.name}"
+                        }
                         if (!file.renameTo(movedTo)) {
                             // Same-volume rename can still fail (open handle,
                             // permissions); fall back to copy+delete. File.copyTo
@@ -305,6 +313,12 @@ class HistoryManager(private val context: Context) {
                 }
             }
             dao.renameModelId(oldId, newId)
+            // Exact-path corrections for the collision-renamed files, after
+            // the bulk prefix rewrite (which has already pointed their rows
+            // at history/<newId>/<oldName>; the file is actually <newName>).
+            renamedPaths.forEach { (oldPath, newPath) ->
+                dao.updateImagePath(oldPath, newPath)
+            }
             true
         } catch (e: Exception) {
             Log.e("HistoryManager", "Failed to rename model history", e)

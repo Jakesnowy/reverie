@@ -33,6 +33,12 @@ interface HistoryDao {
     )
     suspend fun renameModelId(oldId: String, newId: String): Int
 
+    // Repoints a single row after a collision-safe file rename. The bulk
+    // renameModelId rewrite only fixes the directory prefix; it cannot know
+    // which files got a non-colliding name (name_1.ext) during the move.
+    @Query("UPDATE generation_history SET imagePath = :newPath WHERE imagePath = :oldPath")
+    suspend fun updateImagePath(oldPath: String, newPath: String): Int
+
     @Query("SELECT * FROM generation_history WHERE id = :id")
     suspend fun getById(id: Long): HistoryEntity?
 
