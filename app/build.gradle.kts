@@ -45,6 +45,9 @@ android {
             //noinspection ChromeOsAbiSupport
             abiFilters += "arm64-v8a"
         }
+        // CI beta builds override the code via -POVERRIDE_VERSION_CODE so it
+        // increases monotonically across releases; local/default stays put.
+        versionCode = (project.findProperty("OVERRIDE_VERSION_CODE") as String?)?.toInt() ?: 74
     }
 
     signingConfigs {
@@ -67,6 +70,17 @@ android {
                 keyAlias = "androiddebugkey"
                 keyPassword = "android"
             }
+        }
+        create("beta") {
+            // The Beta line is the real distribution channel: its key is the
+            // trust anchor for external users' installs, so it is kept in
+            // repo secrets (BETA_*) and wired in via -P flags at CI time —
+            // never committed. CI decodes BETA_KEYSTORE_BASE64 to a temp file
+            // and passes the path here.
+            storeFile = file(project.findProperty("BETA_STORE_FILE") as String? ?: "beta.keystore")
+            storePassword = project.findProperty("BETA_STORE_PASSWORD") as String?
+            keyAlias = project.findProperty("BETA_KEY_ALIAS") as String?
+            keyPassword = project.findProperty("BETA_KEY_PASSWORD") as String?
         }
     }
 
@@ -96,6 +110,18 @@ android {
             // untouched.
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+        }
+        // Beta line: this repo's official distribution variant. Deliberately
+        // NO applicationId suffix — it takes the plain io.github.xororz.
+        // localdream id, so it installs side-by-side with debug builds
+        // (.debug id) but switching from the official upstream app needs a
+        // one-time uninstall (same id, different signature). Signed with the
+        // secret-kept beta keystore; CI overrides versionCode so betas
+        // upgrade in order.
+        create("beta") {
+            matchingFallbacks += listOf("debug")
+            signingConfig = signingConfigs.getByName("beta")
+            versionNameSuffix = "-beta"
         }
     }
     compileOptions {

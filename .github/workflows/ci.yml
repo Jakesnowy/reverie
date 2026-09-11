@@ -4,6 +4,17 @@ on:
   push:
     branches: [master]
   pull_request:
+  # Beta releases: run manually against any ref once a master state is
+  # beta-worthy. Debug releases stay automatic on master pushes.
+  workflow_dispatch:
+    inputs:
+      release_kind:
+        description: 'Release line to build'
+        type: choice
+        default: debug
+        options:
+          - debug
+          - beta
 
 jobs:
   lint-and-build:
@@ -55,8 +66,31 @@ jobs:
         with:
           submodules: recursive
           # Full history + tags: the changelog is generated from the commits
-          # since the previous debug-* release tag.
+          # since the previous release tag of the same line.
           fetch-depth: 0
+
+      - name: Resolve release line
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && \
+             [ "${{ inputs.release_kind }}" = "beta" ]; then
+            echo "RELEASE_KIND=beta" >> "$GITHUB_ENV"
+          else
+            echo "RELEASE_KIND=debug" >> "$GITHUB_ENV"
+          fi
+
+      # Beta builds are signed with the distribution keystore kept in repo
+      # secrets; it is decoded per-run and never written into the checkout.
+      - name: Decode beta signing keystore
+        if: env.RELEASE_KIND == 'beta'
+        run: |
+          echo "${{ secrets.BETA_KEYSTORE_BASE64 }}" | base64 -d > /tmp/beta.keystore
+          {
+            echo "BETA_STORE_FILE=/tmp/beta.keystore"
+            echo "BETA_STORE_PASSWORD=${{ secrets.BETA_STORE_PASSWORD }}"
+            echo "BETA_KEY_ALIAS=${{ secrets.BETA_KEY_ALIAS }}"
+            echo "BETA_KEY_PASSWORD=${{ secrets.BETA_KEY_PASSWORD }}"
+          } >> "$GITHUB_ENV"
+
 
       - uses: actions/setup-java@v4
         with:
@@ -116,29 +150,45 @@ jobs:
           cp app/src/main/cpp/build/android/bin/arm64-v8a/libstable_diffusion_core.so \
              app/src/main/jniLibs/arm64-v8a/
 
-      - name: Assemble debug APKs
-        run: ./gradlew assembleBasicDebug assembleFilterDebug --stacktrace
+      - name: Assemble APKs
+        run: |
+          if [ "$RELEASE_KIND" = "beta" ]; then
+            # Monotonic versionCode so each beta upgrades over the previous
+            # one; RUN_NUMBER grows with every run of this workflow.
+            ./gradlew assembleBasicBeta assembleFilterBeta --stacktrace \
+              -POVERRIDE_VERSION_CODE=$((74 + RUN_NUMBER))
+          else
+            ./gradlew assembleBasicDebug assembleFilterDebug --stacktrace
+          fi
 
       - name: Stage APKs for release
         run: |
           SHORT_SHA="${GITHUB_SHA::7}"
-          cp app/build/outputs/apk/basic/debug/*.apk  "LocalDream_${SHORT_SHA}_basic_debug.apk"
-          cp app/build/outputs/apk/filter/debug/*.apk "LocalDream_${SHORT_SHA}_filter_debug.apk"
+          if [ "$RELEASE_KIND" = "beta" ]; then
+            cp app/build/outputs/apk/basic/beta/*.apk  "LocalDream_${SHORT_SHA}_basic_beta.apk"
+            cp app/build/outputs/apk/filter/beta/*.apk "LocalDream_${SHORT_SHA}_filter_beta.apk"
+          else
+            cp app/build/outputs/apk/basic/debug/*.apk  "LocalDream_${SHORT_SHA}_basic_debug.apk"
+            cp app/build/outputs/apk/filter/debug/*.apk "LocalDream_${SHORT_SHA}_filter_debug.apk"
+          fi
 
       # One release per build. The changelog covers commits since the previous
-      # debug-* tag. Future Beta line: same flow with a beta-<sha> tag and
-      # make_latest: "true", so the newest beta shows up as the repo's primary
-      # release for easy access.
+      # tag of the same line. Beta releases are the primary/latest release;
+      # debug releases are prereleases that never claim "Latest".
       - name: Generate release notes
         run: |
           SHORT_SHA="${GITHUB_SHA::7}"
-          TAG="debug-${SHORT_SHA}"
-          PREV_TAG=$(git tag --list 'debug-*' --sort=-creatordate | head -n 1)
+          TAG="${RELEASE_KIND}-${SHORT_SHA}"
+          PREV_TAG=$(git tag --list "${RELEASE_KIND}-*" --sort=-creatordate | head -n 1)
           {
-            echo "### LocalDream debug build \`${SHORT_SHA}\`"
+            echo "### LocalDream ${RELEASE_KIND} build \`${SHORT_SHA}\`"
             echo
-            echo "_Built from master at \`${GITHUB_SHA}\` on $(date -u '+%Y-%m-%d %H:%M UTC')._"
+            echo "_Built from \`${GITHUB_REF_NAME}\` at \`${GITHUB_SHA}\` on $(date -u '+%Y-%m-%d %H:%M UTC')._"
             echo
+            if [ "$RELEASE_KIND" = "beta" ]; then
+              echo "> **Beta channel — this repo's official build, bleeding edge.** Installs side-by-side with debug builds (different application id). Switching from the official upstream app needs a one-time uninstall (same application id, different signature). Beta builds upgrade in place over previous betas."
+              echo
+            fi
             if [ -n "$PREV_TAG" ]; then
               echo "**Changes since \`${PREV_TAG}\`:**"
               echo
@@ -150,23 +200,32 @@ jobs:
             fi
             echo
             echo "**Install:** allow \"Install unknown apps\" for your browser or file manager, then install the APK for the flavor you want:"
-            echo "- \`LocalDream_${SHORT_SHA}_basic_debug.apk\` — standard build"
-            echo "- \`LocalDream_${SHORT_SHA}_filter_debug.apk\` — adds the NSFW checker (enforces the threshold)"
+            echo "- \`LocalDream_${SHORT_SHA}_basic_${RELEASE_KIND}.apk\` — standard build"
+            echo "- \`LocalDream_${SHORT_SHA}_filter_${RELEASE_KIND}.apk\` — adds the NSFW checker (enforces the threshold)"
             echo
-            echo "Both flavors include the native engine and share an applicationId — install one at a time. CI builds share a single signing key, so each new build upgrades in place over the previous one."
+            echo "Both flavors include the native engine and share an applicationId — install one at a time. Builds within a line share a signing key, so each new build upgrades in place over the previous one."
           } > release_notes.md
           echo "TAG=$TAG" >> "$GITHUB_ENV"
+          if [ "$RELEASE_KIND" = "beta" ]; then
+            echo "RELEASE_TITLE=Beta build $TAG" >> "$GITHUB_ENV"
+            echo "IS_PRERELEASE=false" >> "$GITHUB_ENV"
+            echo "MARK_LATEST=true" >> "$GITHUB_ENV"
+          else
+            echo "RELEASE_TITLE=Debug build $TAG" >> "$GITHUB_ENV"
+            echo "IS_PRERELEASE=true" >> "$GITHUB_ENV"
+            echo "MARK_LATEST=false" >> "$GITHUB_ENV"
+          fi
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
-          name: "Debug build ${{ env.TAG }}"
+          name: ${{ env.RELEASE_TITLE }}
           body_path: release_notes.md
-          prerelease: true
-          make_latest: false
+          prerelease: ${{ env.IS_PRERELEASE }}
+          make_latest: ${{ env.MARK_LATEST }}
           fail_on_unmatched_files: true
           files: |
-            LocalDream_*_basic_debug.apk
-            LocalDream_*_filter_debug.apk
+            LocalDream_*_basic_*.apk
+            LocalDream_*_filter_*.apk
 
