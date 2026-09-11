@@ -100,7 +100,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -134,7 +133,6 @@ import io.github.xororz.localdream.data.GenerationDefaults
 import io.github.xororz.localdream.data.GenerationMode
 import io.github.xororz.localdream.data.GenerationPreferences
 import io.github.xororz.localdream.data.HistoryFilter
-import io.github.xororz.localdream.data.HistoryItem
 import io.github.xororz.localdream.data.HistoryManager
 import io.github.xororz.localdream.data.ModelRepository
 import io.github.xororz.localdream.data.PatchScanner
@@ -261,31 +259,6 @@ fun ModelRunScreen(
     var generationParams by remember { mutableStateOf<GenerationParameters?>(null) }
     var generationParamsModelId by remember { mutableStateOf(modelId) }
 
-    // History state
-    var historyFilter by remember(modelId) {
-        mutableStateOf(HistoryFilter(modelIds = setOf(modelId)))
-    }
-    val pagedHistory = remember(historyFilter) { historyManager.pager(historyFilter) }
-        .collectAsLazyPagingItems()
-    val historyTotalCount by remember(historyFilter) { historyManager.observeCount(historyFilter) }
-        .collectAsState(initial = 0)
-    // Bounded newest-first feed for the result-page thumbnail strip and the
-    // seed-on-open effect; avoids materializing the full history.
-    val recentHistory by remember(historyFilter) { historyManager.observeRecent(historyFilter, 20) }
-        .collectAsState(initial = emptyList())
-    val knownModelIds by remember { historyManager.observeKnownModelIds() }
-        .collectAsState(initial = emptyList())
-    val knownSchedulers by remember { historyManager.observeKnownSchedulers() }
-        .collectAsState(initial = emptyList())
-    val knownSizes by remember { historyManager.observeKnownSizes() }
-        .collectAsState(initial = emptyList())
-    var showHistoryFilterSheet by remember { mutableStateOf(false) }
-    var selectedHistoryItem by remember { mutableStateOf<HistoryItem?>(null) }
-    var showHistoryDetailDialog by remember { mutableStateOf(false) }
-    var showHistoryParametersDialog by remember { mutableStateOf(false) }
-    var showDeleteHistoryDialog by remember { mutableStateOf(false) }
-    var showReproduceParamsDialog by remember { mutableStateOf(false) }
-    var pendingReproduceParams by remember { mutableStateOf<GenerationParameters?>(null) }
 
     // Parameter share state
     var shareSourceParams by remember { mutableStateOf<GenerationParameters?>(null) }
@@ -294,19 +267,32 @@ fun ModelRunScreen(
     var clipboardImportChecked by remember { mutableStateOf(false) }
     val shareUseBase64 by remember { generationPreferences.observeShareUseBase64() }
         .collectAsState(initial = true)
+
+    // History / filter / selection / batch state (see RunHistoryState).
+    val historyState = remember { RunHistoryState(modelId) }
+    // The filter was previously a remember(modelId)-keyed state: re-derive it
+    // whenever the model argument changes (a no-op on first composition).
+    LaunchedEffect(modelId) {
+        historyState.historyFilter = HistoryFilter(modelIds = setOf(modelId))
+    }
+    val pagedHistory = remember(historyState.historyFilter) { historyManager.pager(historyState.historyFilter) }
+        .collectAsLazyPagingItems()
+    val historyTotalCount by remember(historyState.historyFilter) { historyManager.observeCount(historyState.historyFilter) }
+        .collectAsState(initial = 0)
+    // Bounded newest-first feed for the result-page thumbnail strip and the
+    // seed-on-open effect; avoids materializing the full history.
+    val recentHistory by remember(historyState.historyFilter) { historyManager.observeRecent(historyState.historyFilter, 20) }
+        .collectAsState(initial = emptyList())
+    val knownModelIds by remember { historyManager.observeKnownModelIds() }
+        .collectAsState(initial = emptyList())
+    val knownSchedulers by remember { historyManager.observeKnownSchedulers() }
+        .collectAsState(initial = emptyList())
+    val knownSizes by remember { historyManager.observeKnownSizes() }
+        .collectAsState(initial = emptyList())
     val shareClearClipboardOnImport by remember {
         generationPreferences.observeShareClearClipboardOnImport()
     }.collectAsState(initial = true)
 
-    // Selection mode state
-    var isSelectionMode by remember { mutableStateOf(false) }
-    val selectedIds = remember { mutableStateListOf<Long>() }
-    var showBatchDeleteDialog by remember { mutableStateOf(false) }
-    var showBatchSaveDialog by remember { mutableStateOf(false) }
-    var isBatchSaving by remember { mutableStateOf(false) }
-    var batchSaveTotal by remember { mutableIntStateOf(0) }
-    var batchSaveCurrent by remember { mutableIntStateOf(0) }
-    var batchSaveFailed by remember { mutableIntStateOf(0) }
 
     var generationParamsTmp by remember {
         mutableStateOf(
@@ -2606,59 +2592,59 @@ fun ModelRunScreen(
                         )
 
                         2 -> ModelRunHistoryPage(
-                            historyFilter = historyFilter,
+                            historyFilter = historyState.historyFilter,
                             currentModelId = modelId,
                             pagedItems = pagedHistory,
                             totalCount = historyTotalCount,
-                            isSelectionMode = isSelectionMode,
-                            selectedIds = selectedIds.toSet(),
-                            isBatchSaving = isBatchSaving,
-                            onFilterChange = { historyFilter = it },
-                            onShowFilterSheet = { showHistoryFilterSheet = true },
+                            isSelectionMode = historyState.isSelectionMode,
+                            selectedIds = historyState.selectedIds.toSet(),
+                            isBatchSaving = historyState.isBatchSaving,
+                            onFilterChange = { historyState.historyFilter = it },
+                            onShowFilterSheet = { historyState.showHistoryFilterSheet = true },
                             onItemClick = { item ->
-                                if (isSelectionMode) {
+                                if (historyState.isSelectionMode) {
                                     // Toggle selection
-                                    if (item.id in selectedIds) {
-                                        selectedIds.remove(item.id)
-                                        if (selectedIds.isEmpty()) {
-                                            isSelectionMode = false
+                                    if (item.id in historyState.selectedIds) {
+                                        historyState.selectedIds.remove(item.id)
+                                        if (historyState.selectedIds.isEmpty()) {
+                                            historyState.isSelectionMode = false
                                         }
                                     } else {
-                                        selectedIds.add(item.id)
+                                        historyState.selectedIds.add(item.id)
                                     }
                                 } else {
                                     // Normal preview
-                                    selectedHistoryItem = item
-                                    showHistoryDetailDialog = true
+                                    historyState.selectedHistoryItem = item
+                                    historyState.showHistoryDetailDialog = true
                                 }
                             },
                             onItemLongClick = { item ->
-                                if (!isSelectionMode) {
-                                    isSelectionMode = true
-                                    selectedIds.clear()
-                                    selectedIds.add(item.id)
+                                if (!historyState.isSelectionMode) {
+                                    historyState.isSelectionMode = true
+                                    historyState.selectedIds.clear()
+                                    historyState.selectedIds.add(item.id)
                                 }
                             },
                             onExitSelection = {
-                                isSelectionMode = false
-                                selectedIds.clear()
+                                historyState.isSelectionMode = false
+                                historyState.selectedIds.clear()
                             },
                             onToggleSelectAll = {
                                 // Select-all covers every match via an id query,
                                 // not only the loaded pages.
-                                if (historyTotalCount > 0 && selectedIds.size >= historyTotalCount) {
-                                    selectedIds.clear()
-                                    isSelectionMode = false
+                                if (historyTotalCount > 0 && historyState.selectedIds.size >= historyTotalCount) {
+                                    historyState.selectedIds.clear()
+                                    historyState.isSelectionMode = false
                                 } else {
                                     scope.launch {
-                                        val allIds = historyManager.queryIds(historyFilter)
-                                        selectedIds.clear()
-                                        selectedIds.addAll(allIds)
+                                        val allIds = historyManager.queryIds(historyState.historyFilter)
+                                        historyState.selectedIds.clear()
+                                        historyState.selectedIds.addAll(allIds)
                                     }
                                 }
                             },
-                            onBatchSave = { showBatchSaveDialog = true },
-                            onBatchDelete = { showBatchDeleteDialog = true },
+                            onBatchSave = { historyState.showBatchSaveDialog = true },
+                            onBatchDelete = { historyState.showBatchDeleteDialog = true },
                         )
                     }
                 }
@@ -2759,9 +2745,9 @@ fun ModelRunScreen(
             },
             onReproduce = {
                 generationParams?.let {
-                    pendingReproduceParams = it
+                    historyState.pendingReproduceParams = it
                     showParametersDialog = false
-                    showReproduceParamsDialog = true
+                    historyState.showReproduceParamsDialog = true
                 }
             },
             onDismiss = { showParametersDialog = false },
@@ -3087,36 +3073,36 @@ fun ModelRunScreen(
         )
     }
 
-    if (showHistoryFilterSheet) {
+    if (historyState.showHistoryFilterSheet) {
         HistoryFilterSheet(
-            initialFilter = historyFilter,
+            initialFilter = historyState.historyFilter,
             knownModelIds = knownModelIds,
             knownSchedulers = knownSchedulers,
             knownSizes = knownSizes,
             onApply = {
-                historyFilter = it
-                showHistoryFilterSheet = false
+                historyState.historyFilter = it
+                historyState.showHistoryFilterSheet = false
             },
-            onDismiss = { showHistoryFilterSheet = false },
+            onDismiss = { historyState.showHistoryFilterSheet = false },
         )
     }
 
     // History detail dialog
-    if (showHistoryDetailDialog && selectedHistoryItem != null) {
-        val detailImagePath = selectedHistoryItem?.imageFile?.absolutePath
+    if (historyState.showHistoryDetailDialog && historyState.selectedHistoryItem != null) {
+        val detailImagePath = historyState.selectedHistoryItem?.imageFile?.absolutePath
         val historyBitmap by produceState<Bitmap?>(null, detailImagePath) {
             value = withContext(Dispatchers.IO) {
                 detailImagePath?.let { BitmapFactory.decodeFile(it) }
             }
         }
         val dismissDetail = {
-            showHistoryDetailDialog = false
-            selectedHistoryItem = null
+            historyState.showHistoryDetailDialog = false
+            historyState.selectedHistoryItem = null
         }
         // Same gating as the result page, applied to the previewed item. The
         // click path loads the item into the result-page state (exactly like
         // tapping a thumbnail) and reuses the regular upscale/ultrafix flows.
-        val detailItem = selectedHistoryItem
+        val detailItem = historyState.selectedHistoryItem
         val detailIdle = !isRunning && !isUpscaling && !isUltrafixPreparing
         val detailCanUpscale = historyBitmap != null && detailItem != null &&
             detailIdle && model?.runOnCpu == false &&
@@ -3146,8 +3132,8 @@ fun ModelRunScreen(
                     icon = Icons.Default.Info,
                     contentDescription = "View parameters",
                     onClick = {
-                        if (selectedHistoryItem != null) {
-                            showHistoryParametersDialog = true
+                        if (historyState.selectedHistoryItem != null) {
+                            historyState.showHistoryParametersDialog = true
                         }
                     },
                 )
@@ -3159,11 +3145,11 @@ fun ModelRunScreen(
                     },
                     contentDescription = "toggle favorite",
                     onClick = {
-                        val item = selectedHistoryItem
+                        val item = historyState.selectedHistoryItem
                         if (item != null) {
                             // Keep the dialog's own copy in sync; the grid
                             // refreshes through the observed flow.
-                            selectedHistoryItem = item.copy(favorite = !item.favorite)
+                            historyState.selectedHistoryItem = item.copy(favorite = !item.favorite)
                             scope.launch(Dispatchers.IO) {
                                 historyManager.setFavorite(item.id, !item.favorite)
                             }
@@ -3226,20 +3212,20 @@ fun ModelRunScreen(
     }
 
     // History parameters dialog
-    if (showHistoryParametersDialog && selectedHistoryItem != null) {
-        val params = selectedHistoryItem!!.params
+    if (historyState.showHistoryParametersDialog && historyState.selectedHistoryItem != null) {
+        val params = historyState.selectedHistoryItem!!.params
         GenerationParamsDialog(
             title = stringResource(R.string.generation_params_title),
             params = params,
-            modelId = selectedHistoryItem?.modelId ?: "",
-            displayMode = selectedHistoryItem?.mode,
+            modelId = historyState.selectedHistoryItem?.modelId ?: "",
+            displayMode = historyState.selectedHistoryItem?.mode,
             showImg2imgButton = useImg2img,
             onShare = {
                 shareSourceParams = params
-                shareSourceModelId = selectedHistoryItem?.modelId
+                shareSourceModelId = historyState.selectedHistoryItem?.modelId
             },
             onSendToImg2img = {
-                val item = selectedHistoryItem
+                val item = historyState.selectedHistoryItem
                 if (item != null) {
                     scope.launch {
                         val bmp = withContext(Dispatchers.IO) {
@@ -3247,9 +3233,9 @@ fun ModelRunScreen(
                         }
                         if (bmp != null) {
                             sendBitmapToImg2img(bmp)
-                            showHistoryParametersDialog = false
-                            showHistoryDetailDialog = false
-                            selectedHistoryItem = null
+                            historyState.showHistoryParametersDialog = false
+                            historyState.showHistoryDetailDialog = false
+                            historyState.selectedHistoryItem = null
                         } else {
                             Toast.makeText(
                                 context,
@@ -3261,17 +3247,17 @@ fun ModelRunScreen(
                 }
             },
             onReproduce = {
-                pendingReproduceParams = selectedHistoryItem!!.params
-                showHistoryParametersDialog = false
-                showReproduceParamsDialog = true
+                historyState.pendingReproduceParams = historyState.selectedHistoryItem!!.params
+                historyState.showHistoryParametersDialog = false
+                historyState.showReproduceParamsDialog = true
             },
-            onDismiss = { showHistoryParametersDialog = false },
+            onDismiss = { historyState.showHistoryParametersDialog = false },
         )
     }
 
     // Reproduce parameters dialog
-    if (showReproduceParamsDialog && pendingReproduceParams != null) {
-        val params = pendingReproduceParams!!
+    if (historyState.showReproduceParamsDialog && historyState.pendingReproduceParams != null) {
+        val params = historyState.pendingReproduceParams!!
         ReproduceParametersDialog(
             params = params,
             onApply = { selectedFields ->
@@ -3334,25 +3320,25 @@ fun ModelRunScreen(
                 }
                 saveAllFields()
 
-                showReproduceParamsDialog = false
-                pendingReproduceParams = null
-                showHistoryDetailDialog = false
-                selectedHistoryItem = null
+                historyState.showReproduceParamsDialog = false
+                historyState.pendingReproduceParams = null
+                historyState.showHistoryDetailDialog = false
+                historyState.selectedHistoryItem = null
                 scope.launch {
                     pagerState.animateScrollToPage(0)
                 }
             },
             onDismiss = {
-                showReproduceParamsDialog = false
-                pendingReproduceParams = null
-                showHistoryDetailDialog = false
-                selectedHistoryItem = null
+                historyState.showReproduceParamsDialog = false
+                historyState.pendingReproduceParams = null
+                historyState.showHistoryDetailDialog = false
+                historyState.selectedHistoryItem = null
             },
         )
     }
 
     // Delete confirmation dialog
-    if (showDeleteHistoryDialog && selectedHistoryItem != null) {
+    if (historyState.showDeleteHistoryDialog && historyState.selectedHistoryItem != null) {
         ModelRunConfirmDialog(
             title = stringResource(R.string.delete_image),
             text = stringResource(R.string.delete_image_confirm),
@@ -3361,12 +3347,12 @@ fun ModelRunScreen(
             onConfirm = {
                 scope.launch {
                     val success = historyManager.deleteHistoryItem(
-                        item = selectedHistoryItem!!,
+                        item = historyState.selectedHistoryItem!!,
                     )
                     if (success) {
-                        showDeleteHistoryDialog = false
-                        showHistoryDetailDialog = false
-                        selectedHistoryItem = null
+                        historyState.showDeleteHistoryDialog = false
+                        historyState.showHistoryDetailDialog = false
+                        historyState.selectedHistoryItem = null
                         Toast.makeText(
                             context,
                             msgDeleted,
@@ -3381,36 +3367,36 @@ fun ModelRunScreen(
                     }
                 }
             },
-            onDismiss = { showDeleteHistoryDialog = false },
+            onDismiss = { historyState.showDeleteHistoryDialog = false },
         )
     }
 
     // Batch save confirmation dialog
-    if (showBatchSaveDialog && selectedIds.isNotEmpty()) {
+    if (historyState.showBatchSaveDialog && historyState.selectedIds.isNotEmpty()) {
         ModelRunConfirmDialog(
             title = stringResource(R.string.batch_save),
             text = pluralStringResource(
                 R.plurals.batch_save_confirm,
-                selectedIds.size,
-                selectedIds.size,
+                historyState.selectedIds.size,
+                historyState.selectedIds.size,
             ),
             confirmText = stringResource(R.string.yes),
             onConfirm = {
-                val ids = selectedIds.toList()
-                showBatchSaveDialog = false
+                val ids = historyState.selectedIds.toList()
+                historyState.showBatchSaveDialog = false
                 if (ids.isNotEmpty()) {
-                    batchSaveTotal = ids.size
-                    batchSaveCurrent = 0
-                    batchSaveFailed = 0
-                    isBatchSaving = true
+                    historyState.batchSaveTotal = ids.size
+                    historyState.batchSaveCurrent = 0
+                    historyState.batchSaveFailed = 0
+                    historyState.isBatchSaving = true
                     scope.launch(Dispatchers.IO) {
                         // Resolve ids to items; any gone-missing counts as failed.
                         val items = historyManager.getItems(ids)
                         val missing = ids.size - items.size
                         if (missing > 0) {
                             withContext(Dispatchers.Main) {
-                                batchSaveFailed += missing
-                                batchSaveCurrent += missing
+                                historyState.batchSaveFailed += missing
+                                historyState.batchSaveCurrent += missing
                             }
                         }
                         items.forEach { item ->
@@ -3424,13 +3410,13 @@ fun ModelRunScreen(
                                 )
                             }
                             withContext(Dispatchers.Main) {
-                                batchSaveCurrent += 1
-                                if (!success) batchSaveFailed += 1
+                                historyState.batchSaveCurrent += 1
+                                if (!success) historyState.batchSaveFailed += 1
                             }
                         }
                         withContext(Dispatchers.Main) {
-                            val total = batchSaveTotal
-                            val failed = batchSaveFailed
+                            val total = historyState.batchSaveTotal
+                            val failed = historyState.batchSaveFailed
                             val saved = total - failed
                             val message = if (failed == 0) {
                                 resources.getQuantityString(
@@ -3446,43 +3432,43 @@ fun ModelRunScreen(
                                 message,
                                 Toast.LENGTH_SHORT,
                             ).show()
-                            isBatchSaving = false
-                            selectedIds.clear()
-                            isSelectionMode = false
+                            historyState.isBatchSaving = false
+                            historyState.selectedIds.clear()
+                            historyState.isSelectionMode = false
                         }
                     }
                 }
             },
-            onDismiss = { showBatchSaveDialog = false },
+            onDismiss = { historyState.showBatchSaveDialog = false },
         )
     }
 
     // Batch save progress dialog (modal — blocks other interactions)
-    if (isBatchSaving) {
-        BatchSaveProgressDialog(current = batchSaveCurrent, total = batchSaveTotal)
+    if (historyState.isBatchSaving) {
+        BatchSaveProgressDialog(current = historyState.batchSaveCurrent, total = historyState.batchSaveTotal)
     }
 
     // Batch delete confirmation dialog
-    if (showBatchDeleteDialog && selectedIds.isNotEmpty()) {
+    if (historyState.showBatchDeleteDialog && historyState.selectedIds.isNotEmpty()) {
         ModelRunConfirmDialog(
             title = stringResource(R.string.batch_delete),
             text = pluralStringResource(
                 R.plurals.batch_delete_confirm,
-                selectedIds.size,
-                selectedIds.size,
+                historyState.selectedIds.size,
+                historyState.selectedIds.size,
             ),
             confirmText = stringResource(R.string.delete),
             destructiveConfirm = true,
             onConfirm = {
-                val ids = selectedIds.toList()
-                showBatchDeleteDialog = false
+                val ids = historyState.selectedIds.toList()
+                historyState.showBatchDeleteDialog = false
                 scope.launch {
                     val itemsToDelete = historyManager.getItems(ids)
                     val successCount = historyManager.deleteHistoryItems(itemsToDelete)
                     val failCount = ids.size - successCount
 
-                    selectedIds.clear()
-                    isSelectionMode = false
+                    historyState.selectedIds.clear()
+                    historyState.isSelectionMode = false
 
                     val message = if (failCount == 0) {
                         resources.getQuantityString(
@@ -3500,7 +3486,7 @@ fun ModelRunScreen(
                     ).show()
                 }
             },
-            onDismiss = { showBatchDeleteDialog = false },
+            onDismiss = { historyState.showBatchDeleteDialog = false },
         )
     }
 
