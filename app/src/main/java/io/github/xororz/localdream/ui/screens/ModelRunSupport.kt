@@ -272,6 +272,39 @@ fun padBitmapToCanvas(src: Bitmap, canvasW: Int, canvasH: Int): Bitmap {
     return out
 }
 
+/** Snap before decoding the crop so generation and stitching use the same pixels. */
+internal fun snapInpaintCropRect(rect: Rect, imageWidth: Int, imageHeight: Int, tolerance: Int): Rect {
+    val result = Rect(rect)
+    if (imageWidth - result.width() <= tolerance) {
+        result.left = 0
+        result.right = imageWidth
+    } else if (result.right >= imageWidth - tolerance) {
+        result.offset(imageWidth - result.right, 0)
+    } else if (result.left <= tolerance) {
+        result.offset(-result.left, 0)
+    }
+    if (imageHeight - result.height() <= tolerance) {
+        result.top = 0
+        result.bottom = imageHeight
+    } else if (result.bottom >= imageHeight - tolerance) {
+        result.offset(0, imageHeight - result.bottom)
+    } else if (result.top <= tolerance) {
+        result.offset(0, -result.top)
+    }
+    return result
+}
+
+internal fun mergeDrawingLayers(previous: Bitmap?, drawing: Bitmap): Bitmap {
+    if (previous == null) return drawing
+    return previous.copy(Bitmap.Config.ARGB_8888, true).apply {
+        Canvas(this).drawBitmap(drawing, 0f, 0f, null)
+    }
+}
+
+internal fun drawImageOverlay(target: Bitmap, drawing: Bitmap, crop: Rect) {
+    Canvas(target).drawBitmap(drawing, null, crop, Paint(Paint.FILTER_BITMAP_FLAG))
+}
+
 // Feathered inpaint stitching: the generated patch went through a
 // downscale-to-model-resolution / upscale-back round trip, so even its unmasked
 // pixels differ from the source image (lost high frequencies, resampling
