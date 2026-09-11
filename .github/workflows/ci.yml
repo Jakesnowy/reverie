@@ -53,7 +53,9 @@ jobs:
   # the Android target for tokenizers-cpp. APKs are signed with the
   # repo-committed ci/debug.keystore so successive CI builds upgrade in place.
   test-release:
-    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    if: >-
+      github.ref == 'refs/heads/master' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: lint-and-build
     runs-on: ubuntu-latest
     permissions:
