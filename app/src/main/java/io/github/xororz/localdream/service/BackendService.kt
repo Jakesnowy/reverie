@@ -47,6 +47,13 @@ class BackendService : Service() {
     @Volatile
     private var runtimeDirReady = false
 
+    // True when the safety checker asset was present and copied successfully.
+    // The engine only gets --safety_checker when this is set; a build without
+    // the asset (or a failed copy) degrades to score-less generation instead
+    // of failing the whole backend.
+    @Volatile
+    private var safetyCheckerReady = false
+
     // All backend process management (asset copies, exec, destroy/waitFor)
     // runs on this single thread: jobs stay ordered relative to each other
     // and the main thread never blocks on waitFor() or large file copies.
@@ -404,7 +411,9 @@ class BackendService : Service() {
 
             // Both builds ship the safety checker: filter enforces the
             // threshold, basic runs it in score-only mode (see the
-            // --nsfw_enforce flag below).
+            // --nsfw_enforce flag below). A missing asset must never take the
+            // backend down: degrade to score-less generation instead.
+            safetyCheckerReady = false
             try {
                 val safetyCheckerTarget = File(filesDir, "safety_checker.mnn")
                 val assetSize = assetSize("safety_checker.mnn")
@@ -424,9 +433,12 @@ class BackendService : Service() {
                 }
 
                 safetyCheckerTarget.setReadable(true, true)
+                safetyCheckerReady = true
             } catch (e: IOException) {
-                Log.e(TAG, "copy safety_checker.mnn failed", e)
-                throw RuntimeException("Failed to copy safety checker model", e)
+                Log.w(TAG, "safety_checker asset unavailable - running without NSFW scoring", e)
+                // Remove any partial copy so a later run with the asset
+                // present starts from a clean slate.
+                File(filesDir, "safety_checker.mnn").delete()
             }
 
             runtimeDir.setReadable(true, true)
@@ -533,8 +545,10 @@ class BackendService : Service() {
             // enforces the threshold (masks the image), the basic build runs
             // it in score-only mode so users can see the score. The
             // upscaler-mode process takes no safety-checker flag (same as the
-            // standalone upscale screen's own invocation).
-            if (backendType != BACKEND_TYPE_UPSCALER) {
+            // standalone upscale screen's own invocation). Gated on the copy
+            // actually succeeding - the engine would fail to start if handed
+            // a missing weights file.
+            if (backendType != BACKEND_TYPE_UPSCALER && safetyCheckerReady) {
                 command += listOf(
                     "--safety_checker",
                     File(filesDir, "safety_checker.mnn").absolutePath,
