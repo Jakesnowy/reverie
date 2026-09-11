@@ -6,6 +6,15 @@ plugins {
     alias(libs.plugins.detekt)
 }
 
+// Recomposition/stability reporting for UI optimization work. Off by default;
+// run with -PcomposeMetrics (reports land in app/build/compose_compiler/).
+composeCompiler {
+    if (project.findProperty("composeMetrics") != null) {
+        reportsDestination = layout.buildDirectory.dir("compose_compiler/reports")
+        metricsDestination = layout.buildDirectory.dir("compose_compiler/metrics")
+    }
+}
+
 ktlint {
     android.set(true)
     version.set("1.8.0")
