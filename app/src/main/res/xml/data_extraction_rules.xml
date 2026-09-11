@@ -1,20 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Cloud backup (Android 12+) rules.
+   Cloud backup (Android 12+) and device-transfer rules.
 
-   app_prefs.xml is excluded on purpose: it contains the remote host-mode
+   Everything excluded here is user content that must never travel via an
+   automatic, silent backup or device-to-device migration: prompts (history
+   DB + per-model last prompts in DataStore) and generated images. The
+   intentional path is the History screen's explicit export/import.
+
+   app_prefs.xml is additionally excluded: it contains the remote host-mode
    pairing token (a per-install secret that must not silently travel to
-   another device via backup/restore) and local feature toggles that are
-   trivially re-derived. Everything else (history DB, preferences for UI
-   state) is user content and intentionally backed up.
+   another device).
 
    Ignored for devices older than API 31; devices on API 28-30 use
-   backup_rules.xml below.
+   backup_rules.xml instead.
 -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="app_prefs.xml" />
+        <exclude domain="database" path="local_dream.db" />
+        <exclude domain="database" path="local_dream.db-wal" />
+        <exclude domain="database" path="local_dream.db-shm" />
+        <exclude domain="file" path="history/" />
+        <exclude domain="file" path="datastore/" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="app_prefs.xml" />
+        <exclude domain="database" path="local_dream.db" />
+        <exclude domain="database" path="local_dream.db-wal" />
+        <exclude domain="database" path="local_dream.db-shm" />
+        <exclude domain="file" path="history/" />
+        <exclude domain="file" path="datastore/" />
     </device-transfer>
 </data-extraction-rules>

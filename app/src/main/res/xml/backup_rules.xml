@@ -1,7 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?><!--
    Cloud backup rules for devices on API 28-30 (see
    data_extraction_rules.xml for the API 31+ rules and rationale).
+
+   Everything excluded here is user content that must never travel via an
+   automatic, silent backup: prompts and generated images. The intentional
+   path is the History screen's explicit export/import.
 -->
 <full-backup-content>
     <exclude domain="sharedpref" path="app_prefs.xml" />
+    <!-- Prompts live in the history DB (one row per generated image). -->
+    <exclude domain="database" path="local_dream.db" />
+    <exclude domain="database" path="local_dream.db-wal" />
+    <exclude domain="database" path="local_dream.db-shm" />
+    <!-- Generated images. -->
+    <exclude domain="file" path="history/" />
+    <!-- Per-model last prompts (and other generation prefs). Excluding the
+         whole DataStore also drops non-sensitive settings on restore; they
+         are trivially re-derived. -->
+    <exclude domain="file" path="datastore/" />
 </full-backup-content>
