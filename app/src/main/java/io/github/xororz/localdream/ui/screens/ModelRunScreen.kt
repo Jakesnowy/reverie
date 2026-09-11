@@ -154,7 +154,6 @@ import io.github.xororz.localdream.ui.components.ShareParamsFlow
 import io.github.xororz.localdream.ui.components.SmoothLinearWavyProgressIndicator
 import io.github.xororz.localdream.ui.components.ZoomableImageOverlay
 import io.github.xororz.localdream.ui.theme.Motion
-import io.github.xororz.localdream.utils.ImportedParams
 import io.github.xororz.localdream.utils.LogCapture
 import io.github.xororz.localdream.utils.ParamShare
 import io.github.xororz.localdream.utils.ParamShareField
@@ -260,11 +259,8 @@ fun ModelRunScreen(
     var generationParamsModelId by remember { mutableStateOf(modelId) }
 
 
-    // Parameter share state
-    var shareSourceParams by remember { mutableStateOf<GenerationParameters?>(null) }
-    var shareSourceModelId by remember { mutableStateOf<String?>(null) }
-    var pendingImport by remember { mutableStateOf<ImportedParams?>(null) }
-    var clipboardImportChecked by remember { mutableStateOf(false) }
+    // Parameter share state (see RunShareImportState).
+    val shareState = remember { RunShareImportState() }
     val shareUseBase64 by remember { generationPreferences.observeShareUseBase64() }
         .collectAsState(initial = true)
 
@@ -1866,8 +1862,8 @@ fun ModelRunScreen(
                                             ?.toString()
                                         val imported = ParamShare.tryDecode(raw)
                                         if (imported != null) {
-                                            pendingImport = imported
-                                            clipboardImportChecked = true
+                                            shareState.pendingImport = imported
+                                            shareState.clipboardImportChecked = true
                                         } else {
                                             Toast.makeText(
                                                 context,
@@ -1882,7 +1878,7 @@ fun ModelRunScreen(
                                             selectedImageUri != null -> GenerationMode.IMG2IMG
                                             else -> GenerationMode.TXT2IMG
                                         }
-                                        shareSourceParams = GenerationParameters(
+                                        shareState.shareSourceParams = GenerationParameters(
                                             steps = steps.toInt(),
                                             cfg = cfg,
                                             seed = seed.toLongOrNull(),
@@ -1897,7 +1893,7 @@ fun ModelRunScreen(
                                             scheduler = scheduler,
                                             mode = currentMode,
                                         )
-                                        shareSourceModelId = modelId
+                                        shareState.shareSourceModelId = modelId
                                     },
                                     onReset = { showResetConfirmDialog = true },
                                     onDismiss = { showAdvancedSettings = false },
@@ -2727,8 +2723,8 @@ fun ModelRunScreen(
             modelId = generationParamsModelId,
             showImg2imgButton = useImg2img,
             onShare = {
-                shareSourceParams = generationParams
-                shareSourceModelId = generationParamsModelId
+                shareState.shareSourceParams = generationParams
+                shareState.shareSourceModelId = generationParamsModelId
             },
             onSendToImg2img = {
                 val bmp = currentBitmap
@@ -3221,8 +3217,8 @@ fun ModelRunScreen(
             displayMode = historyState.selectedHistoryItem?.mode,
             showImg2imgButton = useImg2img,
             onShare = {
-                shareSourceParams = params
-                shareSourceModelId = historyState.selectedHistoryItem?.modelId
+                shareState.shareSourceParams = params
+                shareState.shareSourceModelId = historyState.selectedHistoryItem?.modelId
             },
             onSendToImg2img = {
                 val item = historyState.selectedHistoryItem
@@ -3498,11 +3494,11 @@ fun ModelRunScreen(
         } else {
             backendState is BackendService.BackendState.Running
         }
-        if (!clipboardImportChecked &&
+        if (!shareState.clipboardImportChecked &&
             hasInitialized &&
             backendReady
         ) {
-            clipboardImportChecked = true
+            shareState.clipboardImportChecked = true
             val clipboard =
                 context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
             val raw = clipboard?.primaryClip
@@ -3510,29 +3506,29 @@ fun ModelRunScreen(
                 ?.getItemAt(0)
                 ?.coerceToText(context)
                 ?.toString()
-            ParamShare.tryDecode(raw)?.let { pendingImport = it }
+            ParamShare.tryDecode(raw)?.let { shareState.pendingImport = it }
         }
     }
 
     // Share parameters dialog
-    shareSourceParams?.let { source ->
+    shareState.shareSourceParams?.let { source ->
         ShareParamsFlow(
             source = source,
-            modelId = shareSourceModelId,
+            modelId = shareState.shareSourceModelId,
             useBase64Initial = shareUseBase64,
             onUseBase64Changed = { value ->
                 scope.launch { generationPreferences.setShareUseBase64(value) }
             },
-            onCopied = { clipboardImportChecked = true },
+            onCopied = { shareState.clipboardImportChecked = true },
             onDismiss = {
-                shareSourceParams = null
-                shareSourceModelId = null
+                shareState.shareSourceParams = null
+                shareState.shareSourceModelId = null
             },
         )
     }
 
     // Import shared parameters dialog
-    pendingImport?.let { imported ->
+    shareState.pendingImport?.let { imported ->
         val clearClipboardAction = {
             val clipboard =
                 context.getSystemService(Context.CLIPBOARD_SERVICE)
@@ -3581,7 +3577,7 @@ fun ModelRunScreen(
                 if (clearClipboard) {
                     clearClipboardAction()
                 }
-                pendingImport = null
+                shareState.pendingImport = null
                 Toast.makeText(
                     context,
                     msgImportApplied,
@@ -3592,7 +3588,7 @@ fun ModelRunScreen(
                 if (clearClipboard) {
                     clearClipboardAction()
                 }
-                pendingImport = null
+                shareState.pendingImport = null
             },
         )
     }
