@@ -11,12 +11,13 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Shader
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas as ComposeCanvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
@@ -69,20 +70,19 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.toRect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.asAndroidPath
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -90,11 +90,16 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.get
-import androidx.compose.foundation.Canvas as ComposeCanvas
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 enum class CloneMode { OFF, SELECTING, DRAWING }
 
@@ -108,14 +113,58 @@ data class StrokePath(
     val cloneShader: BitmapShader? = null,
 )
 
+private fun StrokePath.matchesBrush(color: Color, width: Float, alpha: Float, blur: Float, shader: BitmapShader?): Boolean = !isEraser && this.color == color && strokeWidth == width && this.alpha == alpha &&
+    blurRadius == blur && cloneShader == shader
+
+private fun drawStrokePaths(canvas: Canvas, paths: List<StrokePath>) {
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeJoin = Paint.Join.ROUND
+        strokeCap = Paint.Cap.ROUND
+    }
+    paths.forEach { stroke ->
+        paint.strokeWidth = stroke.strokeWidth
+        paint.maskFilter = if (stroke.blurRadius > 0f) {
+            BlurMaskFilter(stroke.blurRadius, BlurMaskFilter.Blur.NORMAL)
+        } else {
+            null
+        }
+        paint.color = stroke.color.toArgb()
+        paint.alpha = (stroke.alpha * 255).toInt()
+        paint.shader = if (stroke.isEraser) null else stroke.cloneShader
+        paint.xfermode = if (stroke.isEraser) PorterDuffXfermode(PorterDuff.Mode.DST_OUT) else null
+        canvas.drawPath(stroke.path.asAndroidPath(), paint)
+    }
+}
+
+internal fun renderDrawingLayer(
+    paths: List<StrokePath>,
+    viewportWidth: Int,
+    viewportHeight: Int,
+    bitmapWidth: Int,
+    bitmapHeight: Int,
+): Bitmap {
+    val scale = minOf(viewportWidth.toFloat() / bitmapWidth, viewportHeight.toFloat() / bitmapHeight)
+    val offsetX = (viewportWidth - bitmapWidth * scale) / 2f
+    val offsetY = (viewportHeight - bitmapHeight * scale) / 2f
+    val layer = createBitmap(bitmapWidth, bitmapHeight)
+    val canvas = Canvas(layer)
+    canvas.scale(1f / scale, 1f / scale)
+    canvas.translate(-offsetX, -offsetY)
+    drawStrokePaths(canvas, paths)
+    return layer
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DrawScreen(
     originalBitmap: Bitmap,
-    onDrawingSaved: (Bitmap) -> Unit,
+    onDrawingSaved: suspend (Bitmap, Bitmap) -> Unit,
     onNavigateBack: () -> Unit,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var isSaving by remember { mutableStateOf(false) }
     val prefs = remember { context.getSharedPreferences("brush_prefs", Context.MODE_PRIVATE) }
     var brushColor by remember { mutableStateOf(Color(prefs.getInt("brush_color", Color.Red.toArgb()))) }
     var brushSize by remember { mutableFloatStateOf(prefs.getFloat("brush_size", 60f)) }
@@ -142,7 +191,7 @@ fun DrawScreen(
     var zoomOffset by remember { mutableStateOf(Offset.Zero) }
     var showColorPickerDialog by remember { mutableStateOf(false) }
     var isAdjustingBrush by remember { mutableStateOf(false) }
-    val showPreview = isTouchpadMode || (cloneMode == CloneMode.SELECTING)
+    val showPreview = isTouchpadMode || isAdjustingBrush || (cloneMode == CloneMode.SELECTING)
     var previewOffset by remember { mutableStateOf(Offset.Zero) }
     var isOffsetInitialized by remember { mutableStateOf(false) }
 
@@ -152,13 +201,25 @@ fun DrawScreen(
     var forceNewLayerNextDraw by remember { mutableStateOf(false) }
 
     var showClearDialog by remember { mutableStateOf(false) }
+    var viewportSize by remember { mutableStateOf(IntSize.Zero) }
+    val previewBitmap = remember(viewportSize) {
+        if (viewportSize.width > 0 && viewportSize.height > 0) {
+            createBitmap(viewportSize.width, viewportSize.height)
+        } else {
+            null
+        }
+    }
+
+    BackHandler {
+        if (!isSaving) onNavigateBack()
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Drawing") },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
+                    IconButton(onClick = onNavigateBack, enabled = !isSaving) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
@@ -169,64 +230,42 @@ fun DrawScreen(
                     Button(
                         onClick = {
                             if (paths.isEmpty()) {
-                                onNavigateBack(); return@Button
+                                onNavigateBack()
+                                return@Button
                             }
-                            val drawingBitmap = createBitmap(originalBitmap.width, originalBitmap.height)
-                            val drawingCanvas = Canvas(drawingBitmap)
-                            val paint = Paint().apply {
-                                isAntiAlias = true
-                                style = Paint.Style.STROKE
-                                strokeJoin = Paint.Join.ROUND
-                                strokeCap = Paint.Cap.ROUND
+                            val coords = imageCoordinates ?: return@Button
+                            val viewport = coords.size
+                            if (viewport.width <= 0 || viewport.height <= 0) return@Button
+                            // Keep the saved strokes stable while rendering off the UI thread.
+                            val savedPaths = paths.map { stroke ->
+                                stroke.copy(path = Path().apply { addPath(stroke.path) })
                             }
-                            val coords = imageCoordinates
-                            if (coords != null && coords.size.width > 0 && coords.size.height > 0) {
-                                val containerWidth = coords.size.width.toFloat()
-                                val containerHeight = coords.size.height.toFloat()
-                                val bitmapWidth = originalBitmap.width.toFloat()
-                                val bitmapHeight = originalBitmap.height.toFloat()
-                                val scale = minOf(containerWidth / bitmapWidth, containerHeight / bitmapHeight)
-                                val offsetX = (containerWidth - (bitmapWidth * scale)) / 2f
-                                val offsetY = (containerHeight - (bitmapHeight * scale)) / 2f
-
-                                drawingCanvas.save()
-                                drawingCanvas.scale(1f / scale, 1f / scale)
-                                drawingCanvas.translate(-offsetX, -offsetY)
-                                paths.forEach { strokePath ->
-                                    paint.strokeWidth = strokePath.strokeWidth
-                                    paint.maskFilter = if (strokePath.blurRadius > 0f) {
-                                        BlurMaskFilter(strokePath.blurRadius, BlurMaskFilter.Blur.NORMAL)
-                                    } else null
-
-                                    if (strokePath.isEraser) {
-                                        paint.shader = null
-                                        paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
-                                        paint.setARGB((strokePath.alpha * 255).toInt(), 0, 0, 0)
-                                    } else {
-                                        paint.xfermode = null
-                                        if (strokePath.cloneShader != null) {
-                                            paint.shader = strokePath.cloneShader
-                                            paint.alpha = (strokePath.alpha * 255).toInt()
-                                        } else {
-                                            paint.shader = null
-                                            val c = strokePath.color
-                                            paint.setARGB(
-                                                (strokePath.alpha * 255).toInt(),
-                                                (c.red * 255).toInt(),
-                                                (c.green * 255).toInt(),
-                                                (c.blue * 255).toInt(),
-                                            )
-                                        }
+                            isSaving = true
+                            scope.launch {
+                                try {
+                                    val (result, drawing) = withContext(Dispatchers.Default) {
+                                        val layer = renderDrawingLayer(
+                                            savedPaths,
+                                            viewport.width,
+                                            viewport.height,
+                                            originalBitmap.width,
+                                            originalBitmap.height,
+                                        )
+                                        val result = originalBitmap.copy(Bitmap.Config.ARGB_8888, true)
+                                        Canvas(result).drawBitmap(layer, 0f, 0f, null)
+                                        result to layer
                                     }
-                                    drawingCanvas.drawPath(strokePath.path.asAndroidPath(), paint)
+                                    onDrawingSaved(result, drawing)
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Failed to save drawing: ${e.message}", Toast.LENGTH_LONG).show()
+                                } finally {
+                                    isSaving = false
                                 }
-                                drawingCanvas.restore()
-                                val resultBitmap = originalBitmap.copy(Bitmap.Config.ARGB_8888, true)
-                                Canvas(resultBitmap).drawBitmap(drawingBitmap, 0f, 0f, null)
-                                drawingBitmap.recycle()
-                                onDrawingSaved(resultBitmap)
                             }
                         },
+                        enabled = !isSaving,
                     ) { Text("Done") }
                 },
             )
@@ -244,47 +283,62 @@ fun DrawScreen(
                         currentSize = currentSize,
                         onSizeChange = { value ->
                             if (isEraserMode) {
-                                eraserSize = value; prefs.edit { putFloat("eraser_size", value) }
+                                eraserSize = value
+                                prefs.edit { putFloat("eraser_size", value) }
                             } else {
-                                brushSize = value; prefs.edit { putFloat("brush_size", value) }
+                                brushSize = value
+                                prefs.edit { putFloat("brush_size", value) }
                             }
                             isAdjustingBrush = true
                         },
                         currentAlpha = currentAlpha,
                         onAlphaChange = { value ->
                             if (isEraserMode) {
-                                eraserAlpha = value; prefs.edit { putFloat("eraser_alpha", value) }
+                                eraserAlpha = value
+                                prefs.edit { putFloat("eraser_alpha", value) }
                             } else {
-                                brushAlpha = value; prefs.edit { putFloat("brush_alpha", value) }
+                                brushAlpha = value
+                                prefs.edit { putFloat("brush_alpha", value) }
                             }
                             isAdjustingBrush = true
                         },
                         currentBlur = currentBlur,
                         onBlurChange = { value ->
                             if (isEraserMode) {
-                                eraserBlur = value; prefs.edit { putFloat("eraser_blur", value) }
+                                eraserBlur = value
+                                prefs.edit { putFloat("eraser_blur", value) }
                             } else {
-                                brushBlur = value; prefs.edit { putFloat("brush_blur", value) }
+                                brushBlur = value
+                                prefs.edit { putFloat("brush_blur", value) }
                             }
                             isAdjustingBrush = true
                         },
                         isEraserMode = isEraserMode,
                         onEraserModeChange = {
-                            isEraserMode = it; if (it) {
-                            isPickerMode = false; isZoomMode = false; cloneMode = CloneMode.OFF
-                        }
+                            isEraserMode = it
+                            if (it) {
+                                isPickerMode = false
+                                isZoomMode = false
+                                cloneMode = CloneMode.OFF
+                            }
                         },
                         isPickerMode = isPickerMode,
                         onPickerModeChange = {
-                            isPickerMode = it; if (it) {
-                            isEraserMode = false; isZoomMode = false; cloneMode = CloneMode.OFF
-                        }
+                            isPickerMode = it
+                            if (it) {
+                                isEraserMode = false
+                                isZoomMode = false
+                                cloneMode = CloneMode.OFF
+                            }
                         },
                         isZoomMode = isZoomMode,
                         onZoomModeChange = {
-                            isZoomMode = it; if (it) {
-                            isEraserMode = false; isPickerMode = false; cloneMode = CloneMode.OFF
-                        }
+                            isZoomMode = it
+                            if (it) {
+                                isEraserMode = false
+                                isPickerMode = false
+                                cloneMode = CloneMode.OFF
+                            }
                         },
                         isTouchpadMode = isTouchpadMode,
                         onTouchpadModeChange = { isTouchpadMode = it },
@@ -294,18 +348,21 @@ fun DrawScreen(
                         },
                         onAdjustmentStateChange = { isDragging -> isAdjustingBrush = isDragging },
                         onNewLayerClick = {
-                            forceNewLayerNextDraw = true; Toast.makeText(
-                            context,
-                            "New layer",
-                            Toast.LENGTH_SHORT,
-                        ).show()
+                            forceNewLayerNextDraw = true
+                            Toast.makeText(
+                                context,
+                                "New layer",
+                                Toast.LENGTH_SHORT,
+                            ).show()
                         },
                         cloneMode = cloneMode,
                         onCloneModeClick = {
                             when (cloneMode) {
                                 CloneMode.OFF -> {
                                     cloneMode = CloneMode.SELECTING
-                                    isEraserMode = false; isPickerMode = false; isZoomMode = false
+                                    isEraserMode = false
+                                    isPickerMode = false
+                                    isZoomMode = false
                                 }
 
                                 CloneMode.SELECTING -> {
@@ -345,7 +402,8 @@ fun DrawScreen(
                                 }
 
                                 CloneMode.DRAWING -> {
-                                    cloneMode = CloneMode.OFF; activeCloneShader = null
+                                    cloneMode = CloneMode.OFF
+                                    activeCloneShader = null
                                 }
                             }
                         },
@@ -358,7 +416,8 @@ fun DrawScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .background(Color.Black),
+                .background(Color.Black)
+                .clipToBounds(),
             contentAlignment = Alignment.TopStart,
         ) {
             Box(
@@ -366,22 +425,26 @@ fun DrawScreen(
                     .fillMaxSize()
                     .onGloballyPositioned {
                         imageCoordinates = it
+                        viewportSize = it.size
                         if (!isOffsetInitialized && it.size.width > 0) {
                             previewOffset = Offset(it.size.width / 2f, it.size.height / 2f)
                             isOffsetInitialized = true
                         }
                     }
+                    .testTag("drawing_canvas")
                     .graphicsLayer(
                         scaleX = zoomScale,
                         scaleY = zoomScale,
                         translationX = zoomOffset.x,
                         translationY = zoomOffset.y,
                     )
-                    .pointerInput(isZoomMode, isPickerMode, isTouchpadMode, cloneMode) {
+                    .pointerInput(isZoomMode, isPickerMode, isTouchpadMode, cloneMode, isSaving) {
+                        if (isSaving) return@pointerInput
                         if (isZoomMode) {
                             detectTransformGestures { _, pan, zoom, _ ->
+                                val panInViewport = pan * zoomScale
                                 zoomScale = (zoomScale * zoom).coerceIn(1f, 8f)
-                                zoomOffset = if (zoomScale > 1f) zoomOffset + pan else Offset.Zero
+                                zoomOffset = if (zoomScale > 1f) zoomOffset + panInViewport else Offset.Zero
                             }
                         } else {
                             awaitEachGesture {
@@ -473,11 +536,7 @@ fun DrawScreen(
                                             if (cloneMode == CloneMode.DRAWING && !isEraserMode) activeCloneShader else null
                                         val lastStroke = paths.lastOrNull()
 
-                                        if (!isEraserMode && !forceNewLayerNextDraw && lastStroke != null &&
-                                            !lastStroke.isEraser && lastStroke.strokeWidth == snapWidth &&
-                                            lastStroke.alpha == snapAlpha && lastStroke.blurRadius == snapBlur &&
-                                            lastStroke.color == snapColor && lastStroke.cloneShader == snapShader
-                                        ) {
+                                        if (!isEraserMode && !forceNewLayerNextDraw && lastStroke?.matchesBrush(snapColor, snapWidth, snapAlpha, snapBlur, snapShader) == true) {
                                             lastStroke.path.addPath(finishedPath)
                                         } else {
                                             paths.add(
@@ -511,111 +570,93 @@ fun DrawScreen(
                     modifier = Modifier.fillMaxSize(),
                     onDraw = {
                         pathUpdateTrigger
-                        drawIntoCanvas { canvas ->
-                            canvas.saveLayer(size.toRect(), androidx.compose.ui.graphics.Paint())
-                            val nativePaint = androidx.compose.ui.graphics.Paint().asFrameworkPaint().apply {
-                                isAntiAlias = true
-                                style = Paint.Style.STROKE
-                                strokeCap = Paint.Cap.ROUND
-                                strokeJoin = Paint.Join.ROUND
+                        // BlurMaskFilter is not supported by the hardware canvas.
+                        // Render preview strokes in software, as the saved bitmap is rendered.
+                        previewBitmap?.let { layer ->
+                            layer.eraseColor(android.graphics.Color.TRANSPARENT)
+                            val canvas = Canvas(layer)
+                            drawStrokePaths(canvas, paths)
+                            currentPath?.let { path ->
+                                drawStrokePaths(
+                                    canvas,
+                                    listOf(
+                                        StrokePath(
+                                            path = path,
+                                            color = brushColor,
+                                            strokeWidth = currentSize,
+                                            alpha = currentAlpha,
+                                            isEraser = isEraserMode,
+                                            blurRadius = currentBlur,
+                                            cloneShader = if (cloneMode == CloneMode.DRAWING) activeCloneShader else null,
+                                        ),
+                                    ),
+                                )
                             }
-                            paths.forEach { strokePath ->
-                                nativePaint.strokeWidth = strokePath.strokeWidth
-                                nativePaint.alpha = (strokePath.alpha * 255).toInt()
-                                nativePaint.maskFilter = if (strokePath.blurRadius > 0f) BlurMaskFilter(
-                                    strokePath.blurRadius,
-                                    BlurMaskFilter.Blur.NORMAL,
-                                ) else null
-
-                                if (strokePath.isEraser) {
-                                    nativePaint.shader = null
-                                    nativePaint.color = Color.Black.toArgb()
-                                    nativePaint.xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
-                                    nativePaint.setARGB((strokePath.alpha * 255).toInt(), 0, 0, 0)
-                                } else {
-                                    nativePaint.xfermode = null
-                                    if (strokePath.cloneShader != null) {
-                                        nativePaint.shader = strokePath.cloneShader
-                                        nativePaint.alpha = (strokePath.alpha * 255).toInt()
-                                    } else {
-                                        nativePaint.shader = null
-                                        nativePaint.color = strokePath.color.toArgb()
-                                        nativePaint.alpha = (strokePath.alpha * 255).toInt()
-                                    }
-                                }
-                                canvas.nativeCanvas.drawPath(strokePath.path.asAndroidPath(), nativePaint)
-                            }
-                            currentPath?.let {
-                                nativePaint.strokeWidth = currentSize
-                                nativePaint.alpha = (currentAlpha * 255).toInt()
-                                nativePaint.maskFilter = if (currentBlur > 0f) BlurMaskFilter(
-                                    currentBlur,
-                                    BlurMaskFilter.Blur.NORMAL,
-                                ) else null
-
-                                if (isEraserMode) {
-                                    nativePaint.shader = null
-                                    nativePaint.xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
-                                    nativePaint.setARGB((currentAlpha * 255).toInt(), 0, 0, 0)
-                                } else {
-                                    nativePaint.xfermode = null
-                                    if (cloneMode == CloneMode.DRAWING) {
-                                        nativePaint.shader = activeCloneShader
-                                        nativePaint.alpha = (currentAlpha * 255).toInt()
-                                    } else {
-                                        nativePaint.shader = null
-                                        nativePaint.color = brushColor.toArgb()
-                                        nativePaint.alpha = (currentAlpha * 255).toInt()
-                                    }
-                                }
-                                canvas.nativeCanvas.drawPath(it.asAndroidPath(), nativePaint)
-                            }
-                            canvas.restore()
+                            drawImage(layer.asImageBitmap())
                         }
                     },
                 )
-            }
-            if (showPreview) {
-                val density = LocalDensity.current
-                val brushSizeInDp = with(density) { currentSize.toDp() }
-                val isSelecting = cloneMode == CloneMode.SELECTING
-                val baseColor = if (isEraserMode) Color.White else if (isSelecting) Color.Cyan else brushColor
-                val finalAlpha = if (isEraserMode) 0.4f else if (isSelecting) 0.6f else currentAlpha
+                if (showPreview) {
+                    val density = LocalDensity.current
+                    val brushSizeInDp = with(density) { currentSize.toDp() }
+                    val isSelecting = cloneMode == CloneMode.SELECTING
+                    val baseColor = if (isEraserMode) {
+                        Color.White
+                    } else if (isSelecting) {
+                        Color.Cyan
+                    } else {
+                        brushColor
+                    }
+                    val finalAlpha = if (isEraserMode) {
+                        0.4f
+                    } else if (isSelecting) {
+                        0.6f
+                    } else {
+                        currentAlpha
+                    }
 
-                Box(
-                    modifier = Modifier
-                        .size(brushSizeInDp)
-                        .offset(
-                            x = with(density) { (previewOffset.x - currentSize / 2f).toDp() },
-                            y = with(density) { (previewOffset.y - currentSize / 2f).toDp() },
-                        )
-                        .border(
-                            width = if (isSelecting) 2.5.dp else 1.5.dp,
-                            color = if (isEraserMode) Color.Red else if (isSelecting) Color.Cyan else Color.White,
-                            shape = if (isSelecting) RectangleShape else CircleShape,
-                        ),
-                ) {
-                    if (cloneMode != CloneMode.SELECTING) {
-                        ComposeCanvas(modifier = Modifier.fillMaxSize()) {
-                            val radius = size.minDimension / 2f
-                            if (currentBlur > 0f) {
-                                val ratio = (currentBlur / currentSize).coerceIn(0f, 0.5f)
-                                val startRadiusRatio = (1f - ratio * 2f).coerceIn(0f, 1f)
-                                drawCircle(
-                                    brush = Brush.radialGradient(
-                                        colorStops = arrayOf(
-                                            0.0f to baseColor.copy(alpha = finalAlpha),
-                                            startRadiusRatio to baseColor.copy(alpha = finalAlpha),
-                                            1.0f to Color.Transparent,
+                    Box(
+                        modifier = Modifier
+                            .size(brushSizeInDp)
+                            .offset(
+                                x = with(density) { (previewOffset.x - currentSize / 2f).toDp() },
+                                y = with(density) { (previewOffset.y - currentSize / 2f).toDp() },
+                            )
+                            .testTag("brush_indicator")
+                            .border(
+                                width = if (isSelecting) 2.5.dp else 1.5.dp,
+                                color = if (isEraserMode) {
+                                    Color.Red
+                                } else if (isSelecting) {
+                                    Color.Cyan
+                                } else {
+                                    Color.White
+                                },
+                                shape = if (isSelecting) RectangleShape else CircleShape,
+                            ),
+                    ) {
+                        if (cloneMode != CloneMode.SELECTING) {
+                            ComposeCanvas(modifier = Modifier.fillMaxSize()) {
+                                val radius = size.minDimension / 2f
+                                if (currentBlur > 0f) {
+                                    val ratio = (currentBlur / currentSize).coerceIn(0f, 0.5f)
+                                    val startRadiusRatio = (1f - ratio * 2f).coerceIn(0f, 1f)
+                                    drawCircle(
+                                        brush = Brush.radialGradient(
+                                            colorStops = arrayOf(
+                                                0.0f to baseColor.copy(alpha = finalAlpha),
+                                                startRadiusRatio to baseColor.copy(alpha = finalAlpha),
+                                                1.0f to Color.Transparent,
+                                            ),
+                                            center = center,
+                                            radius = radius,
                                         ),
-                                        center = center,
                                         radius = radius,
-                                    ),
-                                    radius = radius,
-                                    center = center,
-                                )
-                            } else {
-                                drawCircle(color = baseColor.copy(alpha = finalAlpha), radius = radius, center = center)
+                                        center = center,
+                                    )
+                                } else {
+                                    drawCircle(color = baseColor.copy(alpha = finalAlpha), radius = radius, center = center)
+                                }
                             }
                         }
                     }
@@ -625,12 +666,13 @@ fun DrawScreen(
                 SimpleColorPickerDialog(
                     initialColor = brushColor,
                     onColorSelected = { pickedColor ->
-                        brushColor = pickedColor; prefs.edit {
-                        putInt(
-                            "brush_color",
-                            pickedColor.toArgb(),
-                        )
-                    }
+                        brushColor = pickedColor
+                        prefs.edit {
+                            putInt(
+                                "brush_color",
+                                pickedColor.toArgb(),
+                            )
+                        }
                     },
                     onDismiss = { showColorPickerDialog = false },
                 )
@@ -646,7 +688,6 @@ fun DrawScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-
                         paths.clear()
                         zoomScale = 1f
                         zoomOffset = Offset.Zero
@@ -744,7 +785,7 @@ fun BrushToolsComponent(
 
         Row(
             modifier = Modifier.fillMaxWidth(),
-            //horizontalArrangement = Arrangement.SpaceBetween,
+            // horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // Current color / Select color
@@ -792,18 +833,15 @@ fun BrushToolsComponent(
             FilledIconToggleButton(checked = false, onCheckedChange = { onUndo() }) {
                 Icon(imageVector = Icons.AutoMirrored.Default.Undo, contentDescription = "Undo")
             }
-
         }
-
 
         Spacer(modifier = Modifier.height(8.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
-            //horizontalArrangement = Arrangement.Spa,
+            // horizontalArrangement = Arrangement.Spa,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-
             // Zoom
             FilledIconToggleButton(checked = isZoomMode, onCheckedChange = onZoomModeChange) {
                 Icon(imageVector = Icons.Default.Search, contentDescription = "Zoom")
@@ -821,7 +859,6 @@ fun BrushToolsComponent(
             FilledIconToggleButton(checked = false, onCheckedChange = { onClearAll() }) {
                 Icon(imageVector = Icons.Default.Delete, contentDescription = "Clear all")
             }
-
         }
     }
 }
@@ -834,28 +871,38 @@ fun SimpleColorPickerDialog(initialColor: Color, onColorSelected: (Color) -> Uni
     LaunchedEffect(initialColor) {
         val hsv = FloatArray(3)
         android.graphics.Color.colorToHSV(initialColor.toArgb(), hsv)
-        hue = hsv[0]; saturation = hsv[1]; value = hsv[2]
+        hue = hsv[0]
+        saturation = hsv[1]
+        value = hsv[2]
     }
     val currentSelectedColor = remember(hue, saturation, value) { Color.hsv(hue, saturation, value) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Выберите цвет") },
+        title = { Text("Select color") },
         text = {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                 Box(
                     modifier = Modifier
                         .size(200.dp)
                         .background(
-                            brush = Brush.verticalGradient(colors = listOf(Color.White, Color.Black)),
+                            brush = Brush.horizontalGradient(colors = listOf(Color.White, Color.hsv(hue, 1f, 1f))),
                             shape = MaterialTheme.shapes.medium,
                         )
                         .pointerInput(hue) {
-                            detectDragGestures { change, _ ->
-                                change.consume()
-                                val x = change.position.x.coerceIn(0f, size.width.toFloat())
-                                val y = change.position.y.coerceIn(0f, size.height.toFloat())
-                                saturation = x / size.width.toFloat()
-                                value = 1f - (y / size.height.toFloat())
+                            awaitEachGesture {
+                                val down = awaitFirstDown()
+                                fun select(position: Offset) {
+                                    saturation = (position.x / size.width).coerceIn(0f, 1f)
+                                    value = 1f - (position.y / size.height).coerceIn(0f, 1f)
+                                }
+                                select(down.position)
+                                down.consume()
+                                do {
+                                    val event = awaitPointerEvent()
+                                    val change = event.changes.first()
+                                    select(change.position)
+                                    change.consume()
+                                } while (event.changes.any { it.pressed })
                             }
                         },
                 ) {
@@ -863,12 +910,7 @@ fun SimpleColorPickerDialog(initialColor: Color, onColorSelected: (Color) -> Uni
                         modifier = Modifier
                             .fillMaxSize()
                             .background(
-                                brush = Brush.horizontalGradient(
-                                    colors = listOf(
-                                        Color.Transparent,
-                                        Color.hsv(hue, 1f, 1f),
-                                    ),
-                                ),
+                                brush = Brush.verticalGradient(colors = listOf(Color.Transparent, Color.Black)),
                                 shape = MaterialTheme.shapes.medium,
                             ),
                     )
@@ -920,7 +962,7 @@ fun SimpleColorPickerDialog(initialColor: Color, onColorSelected: (Color) -> Uni
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("Результат:")
+                    Text("Result:")
                     Box(
                         modifier = Modifier
                             .size(60.dp, 30.dp)
@@ -930,7 +972,12 @@ fun SimpleColorPickerDialog(initialColor: Color, onColorSelected: (Color) -> Uni
                 }
             }
         },
-        confirmButton = { Button(onClick = { onColorSelected(currentSelectedColor); onDismiss() }) { Text("Select") } },
+        confirmButton = {
+            Button(onClick = {
+                onColorSelected(currentSelectedColor)
+                onDismiss()
+            }) { Text("Select") }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

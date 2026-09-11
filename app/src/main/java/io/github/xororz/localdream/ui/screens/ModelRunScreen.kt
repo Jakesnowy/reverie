@@ -484,6 +484,9 @@ fun ModelRunScreen(
     var cropRect by remember { mutableStateOf<AndroidRect?>(null) }
 
     var showDrawScreen by remember { mutableStateOf(false) }
+    // Transparent edits are also retained for full-image inpaint exports.
+    var drawingOverlayBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var snapshotDrawingOverlayBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
     // True only when selectedImageUri points to a real source image from the gallery picker.
     // False when img2img was seeded from a result/history bitmap (selectedImageUri is a
@@ -564,6 +567,7 @@ fun ModelRunScreen(
     fun clearImg2imgState() {
         selectedImageUri = null
         croppedBitmap = null
+        drawingOverlayBitmap = null
         maskBitmap = null
         isInpaintMode = false
         cropRect = null
@@ -703,11 +707,12 @@ fun ModelRunScreen(
                                 val safeRight = rect.right.coerceAtMost(decoder.width)
                                 val safeBottom = rect.bottom.coerceAtMost(decoder.height)
                                 if (safeRight > safeLeft && safeBottom > safeTop) {
-                                    val region = AndroidRect(
-                                        safeLeft,
-                                        safeTop,
-                                        safeRight,
-                                        safeBottom,
+                                    val region = snapInpaintCropRect(
+                                        rect = AndroidRect(safeLeft, safeTop, safeRight, safeBottom),
+                                        imageWidth = decoder.width,
+                                        imageHeight = decoder.height,
+                                        tolerance = (2f * context.resources.displayMetrics.density)
+                                            .roundToInt().coerceAtLeast(1),
                                     )
                                     clampedRect = region
                                     decoder.decodeRegion(region, BitmapFactory.Options())
@@ -748,6 +753,7 @@ fun ModelRunScreen(
                 withContext(Dispatchers.Main) {
                     cropRect = clampedRect
                     croppedBitmap = scaled
+                    drawingOverlayBitmap = null
                 }
 
                 val tmpFile = File(context.filesDir, "tmp.txt")
@@ -762,6 +768,7 @@ fun ModelRunScreen(
                     ).show()
                     selectedImageUri = null
                     croppedBitmap = null
+                    drawingOverlayBitmap = null
                     cropRect = null
                     hasOriginalImageForStitch = false
                 }
@@ -859,6 +866,7 @@ fun ModelRunScreen(
                 }
 
                 croppedBitmap = displayBitmap
+                drawingOverlayBitmap = null
                 cropRect = AndroidRect(0, 0, displayBitmap.width, displayBitmap.height)
                 selectedImageUri = Uri.fromFile(File(context.filesDir, "tmp.txt"))
                 hasOriginalImageForStitch = false
@@ -875,6 +883,7 @@ fun ModelRunScreen(
                 base64EncodeDone = false
                 selectedImageUri = null
                 croppedBitmap = null
+                drawingOverlayBitmap = null
                 cropRect = null
                 hasOriginalImageForStitch = false
                 false
@@ -1089,58 +1098,12 @@ fun ModelRunScreen(
                         val mutableOriginal =
                             originalBitmap.copy(Bitmap.Config.ARGB_8888, true)
 
-                        var rectW = snapshotCropRect!!.width()
-                        var rectH = snapshotCropRect!!.height()
-
-                        var finalLeft = snapshotCropRect!!.left
-                        var finalTop = snapshotCropRect!!.top
-
-                        // Convert 2dp rounding error margin to physical pixels based on device density
-                        val displayMetrics = context.resources.displayMetrics
-                        val density = displayMetrics.density
-                        val tolerance = (2f * density).roundToInt().coerceAtLeast(1)
-
-                        // Vertical axis adjustment (Top / Bottom)
-                        val matchesFullHeight = Math.abs(rectH - originalBitmap.height) <= tolerance
-
-                        if (matchesFullHeight) {
-                            // If the patch spans the full height, force it to take the EXACT
-                            // maximum height of the original image to prevent vertical compression.
-                            rectH = originalBitmap.height
-                            finalTop = 0
-                        } else {
-                            // Standard edge-snapping for localized vertical patches
-                            val isBottomEdge = snapshotCropRect!!.bottom >= (originalBitmap.height - tolerance)
-                            val isTopEdge = snapshotCropRect!!.top <= tolerance
-
-                            if (isBottomEdge) {
-                                finalTop = originalBitmap.height - rectH
-                            } else if (isTopEdge) {
-                                finalTop = 0
-                            }
+                        snapshotDrawingOverlayBitmap?.let { drawing ->
+                            drawImageOverlay(mutableOriginal, drawing, snapshotCropRect!!)
                         }
 
-                        // Horizontal axis adjustment (Left / Right)
-                        val matchesFullWidth = Math.abs(rectW - originalBitmap.width) <= tolerance
-
-                        if (matchesFullWidth) {
-                            // If the patch spans the full width, force it to take the EXACT
-                            // maximum width of the original image to prevent horizontal compression.
-                            rectW = originalBitmap.width
-                            finalLeft = 0
-                        } else {
-                            // Standard edge-snapping for localized horizontal patches
-                            val isRightEdge = snapshotCropRect!!.right >= (originalBitmap.width - tolerance)
-                            val isLeftEdge = snapshotCropRect!!.left <= tolerance
-
-                            if (isRightEdge) {
-                                finalLeft = originalBitmap.width - rectW
-                            } else if (isLeftEdge) {
-                                finalLeft = 0
-                            }
-                        }
-
-                        // Scale the patch to the mathematically corrected dimensions
+                        val rectW = snapshotCropRect!!.width()
+                        val rectH = snapshotCropRect!!.height()
                         val resizedPatch = bitmap.scale(rectW, rectH)
 
                         // Feather-blend along the mask instead of pasting the
@@ -1151,8 +1114,8 @@ fun ModelRunScreen(
                             target = mutableOriginal,
                             patch = resizedPatch,
                             mask = snapshotMaskBitmap,
-                            left = finalLeft,
-                            top = finalTop,
+                            left = snapshotCropRect!!.left,
+                            top = snapshotCropRect!!.top,
                         )
 
                         saveImage(
@@ -1496,6 +1459,7 @@ fun ModelRunScreen(
                         snapshotSelectedImageUri = selectedImageUri
                         snapshotCropRect = cropRect
                         snapshotMaskBitmap = if (isInpaintMode) maskBitmap else null
+                        snapshotDrawingOverlayBitmap = drawingOverlayBitmap
                         snapshotHasOriginalImage = hasOriginalImageForStitch
                     }
                     // stitchableHistoryIds / currentDisplayedHistoryId are set once
@@ -2308,6 +2272,7 @@ fun ModelRunScreen(
                                     onClick = {
                                         selectedImageUri = null
                                         croppedBitmap = null
+                                        drawingOverlayBitmap = null
                                         maskBitmap = null
                                         isInpaintMode = false
                                         cropRect = null
@@ -2334,6 +2299,7 @@ fun ModelRunScreen(
                                     onClick = {
                                         showDrawScreen = true
                                     },
+                                    enabled = !isRunning && croppedBitmap != null,
                                     modifier = Modifier
                                         .size(24.dp)
                                         .background(
@@ -2754,21 +2720,28 @@ fun ModelRunScreen(
                 },
             )
         }
-        if (showDrawScreen) {
+        if (showDrawScreen && croppedBitmap != null) {
             DrawScreen(
                 originalBitmap = croppedBitmap!!,
-                onDrawingSaved = { sketchedBitmap ->
+                onDrawingSaved = { sketchedBitmap, drawing ->
+                    val previousDrawing = drawingOverlayBitmap
+                    val combinedDrawing = withContext(Dispatchers.Default) {
+                        mergeDrawingLayers(previousDrawing, drawing)
+                    }
+                    withContext(Dispatchers.IO) {
+                        // Match the upload canvas used by cropping and by the inpaint mask.
+                        val upload = padBitmapToCanvas(sketchedBitmap, currentWidth, currentHeight)
+                        val payload = bitmapToBase64Png(upload)
+                        File(context.filesDir, "tmp.txt").writeText(payload)
+                        if (upload !== sketchedBitmap) upload.recycle()
+                    }
                     croppedBitmap = sketchedBitmap
-
-                    val payload = bitmapToBase64Png(croppedBitmap!!)
-                    val tmpFile = File(context.filesDir, "tmp.txt")
-                    tmpFile.writeText(payload)
-
+                    drawingOverlayBitmap = combinedDrawing
                     showDrawScreen = false
                 },
                 onNavigateBack = {
                     showDrawScreen = false
-                }
+                },
             )
         }
     }
