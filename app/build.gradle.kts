@@ -54,6 +54,20 @@ android {
             keyAlias = project.findProperty("RELEASE_KEY_ALIAS") as String?
             keyPassword = project.findProperty("RELEASE_KEY_PASSWORD") as String?
         }
+        getByName("debug") {
+            // GitHub builds must be mutually installable: on CI every debug
+            // APK is signed with the repo-committed ci/debug.keystore, so
+            // successive CI builds upgrade in place over each other (Android
+            // refuses an update when signatures differ). Local builds keep
+            // the default ~/.android/debug.keystore — they don't need to
+            // match CI, and a debug signature is not a trust anchor anyway.
+            if (System.getenv("CI") != null) {
+                storeFile = rootProject.file("ci/debug.keystore")
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
     }
 
     bundle {

@@ -34,11 +34,13 @@ jobs:
           assembleBasicDebug
           --stacktrace
 
-  # Publishes installable test builds (native engine included) to the rolling
-  # "test-builds" prerelease on every push to master, so testers don't have to
-  # build locally. Requires the QAIRT SDK (public community download), NDK
-  # r28 (r29-built engines fail on device - see Codebase_Walkthrough.md) and
-  # Rust 1.85 with the Android target for tokenizers-cpp.
+  # Publishes installable builds to GitHub releases — one release per master
+  # push (tag debug-<sha>, changelog from the commit history), so testers can
+  # pick a specific build instead of digging through a rolling asset pile.
+  # Requires the QAIRT SDK (public community download), NDK r28 (r29-built
+  # engines fail on device - see Codebase_Walkthrough.md) and Rust 1.85 with
+  # the Android target for tokenizers-cpp. APKs are signed with the
+  # repo-committed ci/debug.keystore so successive CI builds upgrade in place.
   test-release:
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     needs: lint-and-build
@@ -52,6 +54,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          # Full history + tags: the changelog is generated from the commits
+          # since the previous debug-* release tag.
+          fetch-depth: 0
 
       - uses: actions/setup-java@v4
         with:
@@ -120,16 +125,44 @@ jobs:
           cp app/build/outputs/apk/basic/debug/*.apk  "LocalDream_${SHORT_SHA}_basic_debug.apk"
           cp app/build/outputs/apk/filter/debug/*.apk "LocalDream_${SHORT_SHA}_filter_debug.apk"
 
-      - name: Publish to the test-builds release
+      # One release per build. The changelog covers commits since the previous
+      # debug-* tag. Future Beta line: same flow with a beta-<sha> tag and
+      # make_latest: "true", so the newest beta shows up as the repo's primary
+      # release for easy access.
+      - name: Generate release notes
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          TAG="debug-${SHORT_SHA}"
+          PREV_TAG=$(git tag --list 'debug-*' --sort=-creatordate | head -n 1)
+          {
+            echo "### LocalDream debug build \`${SHORT_SHA}\`"
+            echo
+            echo "_Built from master at \`${GITHUB_SHA}\` on $(date -u '+%Y-%m-%d %H:%M UTC')._"
+            echo
+            if [ -n "$PREV_TAG" ]; then
+              echo "**Changes since \`${PREV_TAG}\`:**"
+              echo
+              git log --format='* %h %s' "${PREV_TAG}..HEAD"
+            else
+              echo "**Recent commits:**"
+              echo
+              git log --format='* %h %s' -n 10
+            fi
+            echo
+            echo "**Install:** allow \"Install unknown apps\" for your browser or file manager, then install the APK for the flavor you want:"
+            echo "- \`LocalDream_${SHORT_SHA}_basic_debug.apk\` — standard build"
+            echo "- \`LocalDream_${SHORT_SHA}_filter_debug.apk\` — adds the NSFW checker (enforces the threshold)"
+            echo
+            echo "Both flavors include the native engine and share an applicationId — install one at a time. CI builds share a single signing key, so each new build upgrades in place over the previous one."
+          } > release_notes.md
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: test-builds
-          name: "Test builds (master)"
-          body: |
-            Rolling installable builds of master, published on every push.
-            Commit: ${{ github.sha }}
-            Both flavors include the native engine; "filter" adds the NSFW
-            checker. Install one at a time (they share an applicationId).
+          tag_name: ${{ env.TAG }}
+          name: "Debug build ${{ env.TAG }}"
+          body_path: release_notes.md
           prerelease: true
           make_latest: false
           fail_on_unmatched_files: true
