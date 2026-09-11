@@ -127,8 +127,9 @@ fun GenerationParamsDialog(
                         stringResource(R.string.basic_time, params.generationTime ?: "unknown"),
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    // Only set when the generation ran on the with_filter
-                    // build (it ships the NSFW safety checker).
+                    // Only set when the backend ran with a safety checker
+                    // (score-only in the basic build, enforced in the filter
+                    // build).
                     params.nsfwScore?.let { score ->
                         Text(
                             stringResource(R.string.basic_nsfw_score, "%.2f".format(score)),

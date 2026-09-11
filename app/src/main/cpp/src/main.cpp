@@ -64,6 +64,10 @@ struct ServerOptions {
   // When set, every endpoint requires this pairing token (Authorization or
   // legacy X-LD-Auth header).
   std::string auth_token;
+  // Score-only NSFW mode: report nsfw_score without masking the image when it
+  // exceeds nsfw_threshold. The basic build passes 0 (informational score
+  // only); the with_filter build keeps enforcement on.
+  bool nsfw_enforce = true;
   float nsfw_threshold = 0.5f;
   bool use_v_pred = false;
   bool no_img2img = false;  // skip the VAE encoder entirely
@@ -102,6 +106,8 @@ static void showHelp() {
          "  --patch <file>         zstd resolution patch for unet.bin "
          "(sd15npu)\n"
          "  --safety_checker <f>   NSFW checker MNN model\n"
+         "  --nsfw_enforce <0|1>   Mask images over the NSFW threshold (default 1);\n"
+         "                         0 reports the score only\n"
          "  --models_root <dir>    /upscale only accepts weights under <dir>\n"
          "\n"
          "Options:\n"
@@ -139,6 +145,7 @@ static ServerOptions processCommandLine(int argc, char **argv) {
     OPT_NO_IMG2IMG,
     OPT_USE_V_PRED,
     OPT_SAFETY_CHECKER,
+    OPT_NSFW_ENFORCE,
     OPT_CONVERT,
     OPT_CONVERT_CLIP_SKIP_2,
     OPT_PATCH,
@@ -160,6 +167,7 @@ static ServerOptions processCommandLine(int argc, char **argv) {
       {"no_img2img", pal::no_argument, NULL, OPT_NO_IMG2IMG},
       {"use_v_pred", pal::no_argument, NULL, OPT_USE_V_PRED},
       {"safety_checker", pal::required_argument, NULL, OPT_SAFETY_CHECKER},
+      {"nsfw_enforce", pal::required_argument, NULL, OPT_NSFW_ENFORCE},
       {"convert", pal::required_argument, NULL, OPT_CONVERT},
       {"clip_skip_2", pal::no_argument, NULL, OPT_CONVERT_CLIP_SKIP_2},
       {"patch", pal::required_argument, NULL, OPT_PATCH},
@@ -210,6 +218,11 @@ static ServerOptions processCommandLine(int argc, char **argv) {
       case OPT_SAFETY_CHECKER:
         opts.safety_checker_path = pal::g_optArg;
         break;
+      case OPT_NSFW_ENFORCE: {
+        std::string v = pal::g_optArg;
+        opts.nsfw_enforce = !(v == "0" || v == "false");
+        break;
+      }
       case OPT_CONVERT:
         opts.convert_mode = true;
         opts.model_dir = pal::g_optArg;
@@ -881,7 +894,7 @@ int main(int argc, char **argv) {
         safety_interpreter->releaseModel();
       }
       pipeline->setSafetyChecker(safety_interpreter, safety_session,
-                                 opts.nsfw_threshold);
+                                 opts.nsfw_threshold, opts.nsfw_enforce);
     }
 
     if (!opts.isMnn()) {

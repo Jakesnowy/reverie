@@ -41,6 +41,8 @@ data class HistoryEntity(
     @ColumnInfo(defaultValue = "0")
     val favorite: Boolean = false,
 
-    // NSFW classifier score (with_filter build only); null when not computed.
+    // NSFW classifier score; null when no safety checker ran (upscaler-mode
+    // process or a failed check). Reported in both builds; masking above the
+    // threshold happens only in the filter build.
     val nsfwScore: Float? = null,
 )

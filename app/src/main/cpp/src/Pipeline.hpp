@@ -179,10 +179,11 @@ class Pipeline {
   }
 
   void setSafetyChecker(MNN::Interpreter *interpreter, MNN::Session *session,
-                        float threshold) {
+                        float threshold, bool enforce) {
     safety_interpreter_ = interpreter;
     safety_session_ = session;
     nsfw_threshold_ = threshold;
+    nsfw_enforce_ = enforce;
   }
 
   // Mutates `req` only to release the decoded image buffer once it is no
@@ -281,6 +282,9 @@ class Pipeline {
   MNN::Interpreter *safety_interpreter_ = nullptr;
   MNN::Session *safety_session_ = nullptr;
   float nsfw_threshold_ = 0.5f;
+  // When false, nsfw_score is reported but the image is never masked
+  // (score-only mode for the basic build).
+  bool nsfw_enforce_ = true;
 
  private:
   Conditioning encodePrompts(const GenerationRequest &req);
@@ -1233,10 +1237,10 @@ inline GenerationResult Pipeline::generate(
     int final_height = req.height;
 
     // --- Safety Checker ---
-    // Only runs in the with_filter build (a safety checker is loaded). The
-    // score is carried on the result so the app can surface it in the image
-    // properties; logging it here is fine because this code never executes in
-    // the basic build.
+    // Runs whenever a safety checker was loaded (both builds ship one now).
+    // The score is carried on the result so the app can surface it in the
+    // image properties; masking above the threshold happens only when the
+    // caller enabled enforcement (with_filter build).
     float nsfw_score = -1.0f;
     if (safety_interpreter_) {
       auto safety_start = std::chrono::high_resolution_clock::now();
@@ -1246,7 +1250,7 @@ inline GenerationResult Pipeline::generate(
                        safety_interpreter_, safety_session_)) {
         std::cout << "NSFW Score: " << score << std::endl;
         nsfw_score = score;
-        if (score > nsfw_threshold_) {
+        if (nsfw_enforce_ && score > nsfw_threshold_) {
           QNN_WARN("NSFW detected (%.2f>%.2f).", score, nsfw_threshold_);
           std::fill(out_data.begin(), out_data.end(), 255);
         }

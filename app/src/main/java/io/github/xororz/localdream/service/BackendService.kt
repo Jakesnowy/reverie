@@ -402,30 +402,31 @@ class BackendService : Service() {
                 throw RuntimeException("Failed to prepare QNN libraries from assets", e)
             }
 
-            if (BuildConfig.FLAVOR == "filter") {
-                try {
-                    val safetyCheckerTarget = File(filesDir, "safety_checker.mnn")
-                    val assetSize = assetSize("safety_checker.mnn")
+            // Both builds ship the safety checker: filter enforces the
+            // threshold, basic runs it in score-only mode (see the
+            // --nsfw_enforce flag below).
+            try {
+                val safetyCheckerTarget = File(filesDir, "safety_checker.mnn")
+                val assetSize = assetSize("safety_checker.mnn")
 
-                    if (!safetyCheckerTarget.exists() ||
-                        safetyCheckerTarget.length() != assetSize
-                    ) {
-                        assets.open("safety_checker.mnn").use { input ->
-                            safetyCheckerTarget.outputStream().use { output ->
-                                input.copyTo(output)
-                            }
+                if (!safetyCheckerTarget.exists() ||
+                    safetyCheckerTarget.length() != assetSize
+                ) {
+                    assets.open("safety_checker.mnn").use { input ->
+                        safetyCheckerTarget.outputStream().use { output ->
+                            input.copyTo(output)
                         }
-                        Log.i(
-                            TAG,
-                            "Safety checker model copied to: ${safetyCheckerTarget.absolutePath}",
-                        )
                     }
-
-                    safetyCheckerTarget.setReadable(true, true)
-                } catch (e: IOException) {
-                    Log.e(TAG, "copy safety_checker.mnn failed", e)
-                    throw RuntimeException("Failed to copy safety checker model", e)
+                    Log.i(
+                        TAG,
+                        "Safety checker model copied to: ${safetyCheckerTarget.absolutePath}",
+                    )
                 }
+
+                safetyCheckerTarget.setReadable(true, true)
+            } catch (e: IOException) {
+                Log.e(TAG, "copy safety_checker.mnn failed", e)
+                throw RuntimeException("Failed to copy safety checker model", e)
             }
 
             runtimeDir.setReadable(true, true)
@@ -528,12 +529,17 @@ class BackendService : Service() {
             if (File(modelsDir, "V_PRED").exists()) {
                 command += "--use_v_pred"
             }
-            // The upscaler-mode process takes no safety-checker flag (same as
-            // the standalone upscale screen's own invocation).
-            if (BuildConfig.FLAVOR == "filter" && backendType != BACKEND_TYPE_UPSCALER) {
+            // Both builds ship the safety checker: the with_filter build
+            // enforces the threshold (masks the image), the basic build runs
+            // it in score-only mode so users can see the score. The
+            // upscaler-mode process takes no safety-checker flag (same as the
+            // standalone upscale screen's own invocation).
+            if (backendType != BACKEND_TYPE_UPSCALER) {
                 command += listOf(
                     "--safety_checker",
                     File(filesDir, "safety_checker.mnn").absolutePath,
+                    "--nsfw_enforce",
+                    if (BuildConfig.FLAVOR == "filter") "1" else "0",
                 )
             }
             // SDXL and Anima are the large NPU formats that benefit from
