@@ -276,7 +276,7 @@ fun ModelRunScreen(
     val historyTotalCount by remember(historyState.historyFilter) { historyManager.observeCount(historyState.historyFilter) }
         .collectAsState(initial = 0)
     // Bounded newest-first feed for the result-page thumbnail strip and the
-    // seed-on-open effect; avoids materializing the full history.
+    // runState.seed-on-open effect; avoids materializing the full history.
     val recentHistory by remember(historyState.historyFilter) { historyManager.observeRecent(historyState.historyFilter, 20) }
         .collectAsState(initial = emptyList())
     val knownModelIds by remember { historyManager.observeKnownModelIds() }
@@ -305,28 +305,9 @@ fun ModelRunScreen(
             ),
         )
     }
-    var cfg by remember { mutableFloatStateOf(GenerationDefaults.GLOBAL.cfg) }
-    var steps by remember { mutableFloatStateOf(GenerationDefaults.GLOBAL.steps) }
-    var seed by remember { mutableStateOf(GenerationDefaults.GLOBAL.seed) }
-    var denoiseStrength by remember { mutableFloatStateOf(GenerationDefaults.GLOBAL.denoiseStrength) }
-    var useOpenCL by remember { mutableStateOf(false) }
-    var batchCounts by remember { mutableIntStateOf(GenerationDefaults.GLOBAL.batchCounts) }
-    var scheduler by remember { mutableStateOf(GenerationDefaults.GLOBAL.scheduler) }
-    var aspectRatio by remember { mutableStateOf(GenerationDefaults.GLOBAL.aspectRatio) }
-    var showCustomAspectRatioDialog by remember { mutableStateOf(false) }
-    var currentBatchIndex by remember { mutableIntStateOf(0) }
-    var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
-    var base64EncodeDone by remember { mutableStateOf(false) }
-    var returnedSeed by remember { mutableStateOf<Long?>(null) }
-    var isRunning by remember { mutableStateOf(false) }
-    var progress by remember { mutableFloatStateOf(0f) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    var isCheckingBackend by remember { mutableStateOf(true) }
+    // Generation-run state (see RunGenerationState).
+    val runState = remember { RunGenerationState() }
 
-    // True only after a health check succeeded (and reset when a restart
-    // begins). Gates tokenizer calls: "checking finished" alone also covers
-    // the failure case, where firing tokenize requests is pointless.
-    var backendReady by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         if (isRemote) {
@@ -339,14 +320,12 @@ fun ModelRunScreen(
             if (remoteRepository.models.none { it.id == modelId }) {
                 // Host unreachable or the model is gone from it: drop the
                 // loading overlay so the offline body below is visible.
-                isCheckingBackend = false
+                runState.isCheckingBackend = false
             }
         }
     }
     var showParametersDialog by remember { mutableStateOf(false) }
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { 3 })
-    var generationStartTime by remember { mutableStateOf<Long?>(null) }
-    var hasInitialized by remember { mutableStateOf(false) }
     var showReportDialog by remember { mutableStateOf(false) }
 
     // The prompt fields live on page 0. When the user swipes to the result or
@@ -466,8 +445,8 @@ fun ModelRunScreen(
     var savedPathHistory by remember { mutableStateOf<List<PathData>?>(null) }
     var cropRect by remember { mutableStateOf<AndroidRect?>(null) }
 
-    // True only when selectedImageUri points to a real source image from the gallery picker.
-    // False when img2img was seeded from a result/history bitmap (selectedImageUri is a
+    // True only when runState.selectedImageUri points to a real source image from the gallery picker.
+    // False when img2img was seeded from a result/history bitmap (runState.selectedImageUri is a
     // synthetic tmp.txt path that holds base64, not a decodable image).
     var hasOriginalImageForStitch by remember { mutableStateOf(false) }
 
@@ -505,11 +484,11 @@ fun ModelRunScreen(
     var showUltrafixImportDialog by remember { mutableStateOf(false) }
     var pendingUltrafix by remember { mutableStateOf(false) }
     var isUltrafixPreparing by remember { mutableStateOf(false) }
-    // UltraFix runs with its own steps/denoise (defaults 10 / 0.4), persisted
+    // UltraFix runs with its own runState.steps/denoise (defaults 10 / 0.4), persisted
     // globally and kept independent of the main generation params so tweaking
     // them in the UltraFix dialog never touches the prompt-page settings.
     var ultrafixSteps by remember { mutableFloatStateOf(GenerationDefaults.GLOBAL.ultrafixSteps) }
-    // Denoise is controlled as a step count (0..min(10, steps)); the backend
+    // Denoise is controlled as a step count (0..min(10, runState.steps)); the backend
     // strength is derived from it at run time.
     var ultrafixDenoiseSteps by remember {
         mutableIntStateOf(GenerationDefaults.GLOBAL.ultrafixDenoiseSteps)
@@ -535,21 +514,21 @@ fun ModelRunScreen(
     // (effectiveWidth, effectiveHeight) is the size of the visible result.
     // For SDXL with non-1:1 aspect_ratio it equals the centered target_w/target_h
     // inside the 1024x1024 generation canvas; otherwise it equals the canvas itself.
-    val effectiveSize = remember(model?.usesFixedCanvas, aspectRatio, currentWidth, currentHeight) {
-        computeAspectTargetSize(model?.usesFixedCanvas == true, aspectRatio)
+    val effectiveSize = remember(model?.usesFixedCanvas, runState.aspectRatio, currentWidth, currentHeight) {
+        computeAspectTargetSize(model?.usesFixedCanvas == true, runState.aspectRatio)
             ?: Pair(currentWidth, currentHeight)
     }
     val effectiveWidth = effectiveSize.first
     val effectiveHeight = effectiveSize.second
 
     fun clearImg2imgState() {
-        selectedImageUri = null
+        runState.selectedImageUri = null
         croppedBitmap = null
         maskBitmap = null
         isInpaintMode = false
         cropRect = null
         savedPathHistory = null
-        base64EncodeDone = false
+        runState.base64EncodeDone = false
         hasOriginalImageForStitch = false
     }
 
@@ -561,16 +540,16 @@ fun ModelRunScreen(
                 modelId = modelId,
                 prompt = promptField.text,
                 negativePrompt = negativePromptField.text,
-                steps = steps,
-                cfg = cfg,
-                seed = seed,
+                steps = runState.steps,
+                cfg = runState.cfg,
+                seed = runState.seed,
                 width = currentWidth,
                 height = currentHeight,
-                denoiseStrength = denoiseStrength,
-                useOpenCL = useOpenCL,
-                batchCounts = batchCounts,
-                scheduler = scheduler,
-                aspectRatio = aspectRatio,
+                denoiseStrength = runState.denoiseStrength,
+                useOpenCL = runState.useOpenCL,
+                batchCounts = runState.batchCounts,
+                scheduler = runState.scheduler,
+                aspectRatio = runState.aspectRatio,
             )
         }
     }
@@ -590,13 +569,13 @@ fun ModelRunScreen(
 
     val onStepsChange = remember {
         { value: Float ->
-            steps = value
+            runState.steps = value
             saveAllFields()
         }
     }
     val onCfgChange = remember {
         { value: Float ->
-            cfg = value
+            runState.cfg = value
             saveAllFields()
         }
     }
@@ -612,13 +591,13 @@ fun ModelRunScreen(
     val onDenoiseStrengthChange =
         remember {
             { value: Float ->
-                denoiseStrength = value
+                runState.denoiseStrength = value
                 saveAllFields()
             }
         }
     val onSeedChange = remember {
         { value: String ->
-            seed = value
+            runState.seed = value
             saveAllFields()
         }
     }
@@ -627,20 +606,20 @@ fun ModelRunScreen(
 
     PromptTokenCountEffect(
         promptField,
-        backendReady = backendReady,
+        backendReady = runState.backendReady,
         backendHost = backendHost,
         authToken = backendAuthToken,
     )
     PromptTokenCountEffect(
         negativePromptField,
-        backendReady = backendReady,
+        backendReady = runState.backendReady,
         backendHost = backendHost,
         authToken = backendAuthToken,
     )
 
     val onBatchCountsChange = remember {
         { value: Float ->
-            batchCounts = value.roundToInt().coerceIn(1, 10)
+            runState.batchCounts = value.roundToInt().coerceIn(1, 10)
             saveAllFields()
         }
     }
@@ -654,7 +633,7 @@ fun ModelRunScreen(
     fun handleCropComplete(base64String: String, bitmap: Bitmap, rect: AndroidRect) {
         showCropScreen = false
         val sourceUri = imageUriForCrop
-        selectedImageUri = sourceUri
+        runState.selectedImageUri = sourceUri
         imageUriForCrop = null
         hasOriginalImageForStitch = true
 
@@ -673,9 +652,9 @@ fun ModelRunScreen(
         // exact same pixel range we cropped from.
         scope.launch(Dispatchers.IO) {
             try {
-                base64EncodeDone = false
+                runState.base64EncodeDone = false
                 val aspectTarget =
-                    computeAspectTargetSize(model?.usesFixedCanvas == true, aspectRatio)
+                    computeAspectTargetSize(model?.usesFixedCanvas == true, runState.aspectRatio)
                 val targetW = aspectTarget?.first ?: currentWidth
                 val targetH = aspectTarget?.second ?: currentHeight
 
@@ -743,7 +722,7 @@ fun ModelRunScreen(
 
                 val tmpFile = File(context.filesDir, "tmp.txt")
                 tmpFile.writeText(payload)
-                base64EncodeDone = true
+                runState.base64EncodeDone = true
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(
@@ -751,7 +730,7 @@ fun ModelRunScreen(
                         msgSaveFailed.format(e.message ?: msgUnknownError),
                         Toast.LENGTH_SHORT,
                     ).show()
-                    selectedImageUri = null
+                    runState.selectedImageUri = null
                     croppedBitmap = null
                     cropRect = null
                     hasOriginalImageForStitch = false
@@ -782,7 +761,7 @@ fun ModelRunScreen(
                 maskFile.writeText(payload)
 
                 withContext(Dispatchers.Main) {
-                    base64EncodeDone = true
+                    runState.base64EncodeDone = true
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -802,8 +781,8 @@ fun ModelRunScreen(
     fun sendBitmapToImg2img(bitmap: Bitmap) {
         scope.launch {
             val ready = try {
-                base64EncodeDone = false
-                val aspectTarget = computeAspectTargetSize(model?.usesFixedCanvas == true, aspectRatio)
+                runState.base64EncodeDone = false
+                val aspectTarget = computeAspectTargetSize(model?.usesFixedCanvas == true, runState.aspectRatio)
                 val targetW = aspectTarget?.first ?: currentWidth
                 val targetH = aspectTarget?.second ?: currentHeight
 
@@ -851,9 +830,9 @@ fun ModelRunScreen(
 
                 croppedBitmap = displayBitmap
                 cropRect = AndroidRect(0, 0, displayBitmap.width, displayBitmap.height)
-                selectedImageUri = Uri.fromFile(File(context.filesDir, "tmp.txt"))
+                runState.selectedImageUri = Uri.fromFile(File(context.filesDir, "tmp.txt"))
                 hasOriginalImageForStitch = false
-                base64EncodeDone = true
+                runState.base64EncodeDone = true
                 true
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -863,8 +842,8 @@ fun ModelRunScreen(
                     msgImg2imgFailed.format(e.message ?: msgUnknownError),
                     Toast.LENGTH_SHORT,
                 ).show()
-                base64EncodeDone = false
-                selectedImageUri = null
+                runState.base64EncodeDone = false
+                runState.selectedImageUri = null
                 croppedBitmap = null
                 cropRect = null
                 hasOriginalImageForStitch = false
@@ -890,7 +869,7 @@ fun ModelRunScreen(
         val tileSize = maxOf(currentWidth, currentHeight)
         val totalSteps = ultrafixSteps.roundToInt()
         // Derive the strength that makes the backend run exactly the chosen
-        // number of denoise steps (clamped to the total).
+        // number of denoise runState.steps (clamped to the total).
         val ultrafixDenoiseStrength = ultrafixDenoiseStrength(ultrafixDenoiseSteps, totalSteps)
         // When quality-denoise is on (default), UltraFix runs on neutral quality
         // tags instead of the prompt-page prompt; off uses the box prompt.
@@ -899,7 +878,7 @@ fun ModelRunScreen(
         isUltrafixPreparing = true
         generationParamsTmp = GenerationParameters(
             steps = totalSteps,
-            cfg = cfg,
+            cfg = runState.cfg,
             seed = 0,
             // Record the prompt UltraFix actually ran with (quality tags when
             // the toggle is on), so history reflects what produced the result.
@@ -911,10 +890,10 @@ fun ModelRunScreen(
             runOnCpu = false,
             denoiseStrength = ultrafixDenoiseStrength,
             useOpenCL = false,
-            scheduler = scheduler,
+            scheduler = runState.scheduler,
         )
         batchGenerationJob = coroutineScope.launch {
-            // The progress card lives on the prompt page; bring it into view.
+            // The runState.progress card lives on the prompt page; bring it into view.
             try {
                 pagerState.animateScrollToPage(0)
             } catch (_: kotlinx.coroutines.CancellationException) {
@@ -929,14 +908,14 @@ fun ModelRunScreen(
                     putExtra("prompt", ultrafixPrompt)
                     putExtra("negative_prompt", negativePromptField.text)
                     putExtra("steps", totalSteps)
-                    putExtra("cfg", cfg)
-                    seed.toLongOrNull()?.let { putExtra("seed", it) }
+                    putExtra("cfg", runState.cfg)
+                    runState.seed.toLongOrNull()?.let { putExtra("seed", it) }
                     putExtra("width", bmp.width)
                     putExtra("height", bmp.height)
                     putExtra("effective_width", bmp.width)
                     putExtra("effective_height", bmp.height)
                     putExtra("denoise_strength", ultrafixDenoiseStrength)
-                    putExtra("scheduler", scheduler)
+                    putExtra("scheduler", runState.scheduler)
                     putExtra("ultrafix", true)
                     putExtra("ultrafix_tile_size", tileSize)
                     putExtra("backend_host", backendHost)
@@ -961,7 +940,7 @@ fun ModelRunScreen(
 
             // Same teardown as the batch loop: wait for the terminal state and
             // the service stop, then clear the running flag so the prompt-page
-            // progress card doesn't linger at 0%.
+            // runState.progress card doesn't linger at 0%.
             BackgroundGenerationService.generationState.first { state ->
                 state is GenerationState.Complete || state is GenerationState.Error
             }
@@ -969,7 +948,7 @@ fun ModelRunScreen(
                 BackgroundGenerationService.isServiceRunning.first { !it }
             }
             BackgroundGenerationService.resetState()
-            isRunning = false
+            runState.isRunning = false
         }
     }
 
@@ -988,7 +967,7 @@ fun ModelRunScreen(
         currentBitmap = bitmap
         generationParams = GenerationParameters(
             steps = 0,
-            cfg = cfg,
+            cfg = runState.cfg,
             seed = null,
             prompt = "",
             negativePrompt = "",
@@ -1143,11 +1122,11 @@ fun ModelRunScreen(
                     .setAction(BackendService.ACTION_STOP)
                 context.startForegroundService(backendServiceIntent)
             }
-            isRunning = false
-            progress = 0f
-            errorMessage = null
-            currentBatchIndex = 0
-            generationStartTime = null
+            runState.isRunning = false
+            runState.progress = 0f
+            runState.errorMessage = null
+            runState.currentBatchIndex = 0
+            runState.generationStartTime = null
             BackgroundGenerationService.resetState()
             coroutineScope.launch {
                 pagerState.scrollToPage(0)
@@ -1174,10 +1153,10 @@ fun ModelRunScreen(
         BackgroundGenerationService.resetState()
         intermediateBitmap = null
         pendingUltrafix = false
-        isRunning = false
-        progress = 0f
-        currentBatchIndex = 0
-        generationStartTime = null
+        runState.isRunning = false
+        runState.progress = 0f
+        runState.currentBatchIndex = 0
+        runState.generationStartTime = null
         Toast.makeText(
             context,
             msgGenerationInterrupted,
@@ -1221,7 +1200,7 @@ fun ModelRunScreen(
     }
 
     LaunchedEffect(modelId, model) {
-        if (!hasInitialized && model != null) {
+        if (!runState.hasInitialized && model != null) {
             val prefs = generationPreferences.getPreferences(modelId).first()
             val isFirstRun = !prefs.hasSaved
             val defaults = model.defaults
@@ -1231,16 +1210,16 @@ fun ModelRunScreen(
                 if (isFirstRun) defaults.negativePrompt else prefs.negativePrompt,
             )
 
-            steps = if (isFirstRun) defaults.steps else prefs.steps
-            cfg = if (isFirstRun) defaults.cfg else prefs.cfg
-            seed = prefs.seed
-            denoiseStrength = prefs.denoiseStrength
-            useOpenCL = prefs.useOpenCL
-            batchCounts = prefs.batchCounts
-            scheduler = if (isFirstRun) defaults.scheduler else prefs.scheduler
+            runState.steps = if (isFirstRun) defaults.steps else prefs.steps
+            runState.cfg = if (isFirstRun) defaults.cfg else prefs.cfg
+            runState.seed = prefs.seed
+            runState.denoiseStrength = prefs.denoiseStrength
+            runState.useOpenCL = prefs.useOpenCL
+            runState.batchCounts = prefs.batchCounts
+            runState.scheduler = if (isFirstRun) defaults.scheduler else prefs.scheduler
             // Without img2img the backend has no VAE encoder, so a stored
             // non-1:1 ratio would silently fall back to 1024x1024 anyway.
-            aspectRatio = if (useImg2img) prefs.aspectRatio else "1:1"
+            runState.aspectRatio = if (useImg2img) prefs.aspectRatio else "1:1"
 
             currentWidth = when {
                 model.usesFixedCanvas -> 1024
@@ -1271,12 +1250,12 @@ fun ModelRunScreen(
                 saveAllFields()
             }
 
-            hasInitialized = true
+            runState.hasInitialized = true
         }
     }
 
-    LaunchedEffect(hasInitialized) {
-        if (hasInitialized) {
+    LaunchedEffect(runState.hasInitialized) {
+        if (runState.hasInitialized) {
             if (isRemote) {
                 // Ask the host to start (or keep serving) this model, and only
                 // then kick off the health check (via the restart trigger):
@@ -1287,8 +1266,8 @@ fun ModelRunScreen(
                 if (ok) {
                     backendRestartTrigger++
                 } else {
-                    isCheckingBackend = false
-                    errorMessage = msgRemoteSelectFailed
+                    runState.isCheckingBackend = false
+                    runState.errorMessage = msgRemoteSelectFailed
                 }
             } else {
                 // Always declare the target; BackendService reconciles idempotently
@@ -1300,7 +1279,7 @@ fun ModelRunScreen(
                     putExtra("backendType", model?.backendType)
                     putExtra("width", currentWidth)
                     putExtra("height", currentHeight)
-                    putExtra("use_opencl", useOpenCL)
+                    putExtra("use_opencl", runState.useOpenCL)
                 }
                 context.startForegroundService(intent)
             }
@@ -1347,11 +1326,11 @@ fun ModelRunScreen(
     LaunchedEffect(serviceState) {
         when (val state = serviceState) {
             is GenerationState.Progress -> {
-                if (generationStartTime == null) {
-                    generationStartTime = System.currentTimeMillis()
+                if (runState.generationStartTime == null) {
+                    runState.generationStartTime = System.currentTimeMillis()
                 }
-                progress = state.progress
-                isRunning = true
+                runState.progress = state.progress
+                runState.isRunning = true
                 state.intermediateImage?.let { intermediateBitmap = it }
             }
 
@@ -1360,10 +1339,10 @@ fun ModelRunScreen(
                 withContext(Dispatchers.Main) {
                     Log.d("ModelRunScreen", "update bitmap")
 
-                    state.seed?.let { returnedSeed = it }
-                    progress = 0f
+                    state.seed?.let { runState.returnedSeed = it }
+                    runState.progress = 0f
 
-                    val genTime = generationStartTime?.let { startTime ->
+                    val genTime = runState.generationStartTime?.let { startTime ->
                         val endTime = System.currentTimeMillis()
                         val duration = endTime - startTime
                         when {
@@ -1385,14 +1364,14 @@ fun ModelRunScreen(
                     val currentGenerationMode = when {
                         wasUltrafix -> GenerationMode.ULTRAFIX
                         isInpaintMode -> GenerationMode.INPAINT
-                        selectedImageUri != null -> GenerationMode.IMG2IMG
+                        runState.selectedImageUri != null -> GenerationMode.IMG2IMG
                         else -> GenerationMode.TXT2IMG
                     }
 
                     val newParams = GenerationParameters(
                         steps = generationParamsTmp.steps,
                         cfg = generationParamsTmp.cfg,
-                        seed = returnedSeed,
+                        seed = runState.returnedSeed,
                         prompt = generationParamsTmp.prompt,
                         negativePrompt = generationParamsTmp.negativePrompt,
                         generationTime = genTime,
@@ -1436,7 +1415,7 @@ fun ModelRunScreen(
 
                     if (!wasUltrafix) {
                         snapshotIsInpaintMode = isInpaintMode
-                        snapshotSelectedImageUri = selectedImageUri
+                        snapshotSelectedImageUri = runState.selectedImageUri
                         snapshotCropRect = cropRect
                         snapshotMaskBitmap = if (isInpaintMode) maskBitmap else null
                         snapshotHasOriginalImage = hasOriginalImageForStitch
@@ -1451,7 +1430,7 @@ fun ModelRunScreen(
                         "params update: ${generationParams?.steps}, ${generationParams?.cfg}",
                     )
 
-                    generationStartTime = null
+                    runState.generationStartTime = null
 
                     if (pagerState.currentPage == 0 && !showAdvancedSettings) {
                         try {
@@ -1467,16 +1446,16 @@ fun ModelRunScreen(
 
             is GenerationState.Error -> {
                 intermediateBitmap = null
-                errorMessage = state.message
-                isRunning = false
-                progress = 0f
-                generationStartTime = null
+                runState.errorMessage = state.message
+                runState.isRunning = false
+                runState.progress = 0f
+                runState.generationStartTime = null
                 pendingUltrafix = false
             }
 
             else -> {
-                isRunning = false
-                progress = 0f
+                runState.isRunning = false
+                runState.progress = 0f
             }
         }
     }
@@ -1485,7 +1464,7 @@ fun ModelRunScreen(
     // interrupt the generation and stays on the screen (a second back exits).
     // In idle state the predictive back gesture can show NavHost's peek of
     // the previous destination.
-    if (isRunning) {
+    if (runState.isRunning) {
         BackHandler { showInterruptDialog = true }
     }
 
@@ -1506,24 +1485,24 @@ fun ModelRunScreen(
             text = stringResource(R.string.opencl_warning),
             onConfirm = {
                 showOpenCLWarningDialog = false
-                useOpenCL = true
+                runState.useOpenCL = true
                 saveAllFields()
             },
             onDismiss = { showOpenCLWarningDialog = false },
         )
     }
 
-    if (showCustomAspectRatioDialog) {
+    if (runState.showCustomAspectRatioDialog) {
         CustomAspectRatioDialog(
             onConfirm = { newRatio ->
-                if (newRatio != aspectRatio) {
-                    aspectRatio = newRatio
+                if (newRatio != runState.aspectRatio) {
+                    runState.aspectRatio = newRatio
                     clearImg2imgState()
                     saveAllFields()
                 }
-                showCustomAspectRatioDialog = false
+                runState.showCustomAspectRatioDialog = false
             },
-            onDismiss = { showCustomAspectRatioDialog = false },
+            onDismiss = { runState.showCustomAspectRatioDialog = false },
         )
     }
 
@@ -1564,8 +1543,8 @@ fun ModelRunScreen(
                         // check only passes once the host reports the new
                         // resolution, so triggering it alongside the in-flight
                         // select is safe.
-                        isCheckingBackend = true
-                        backendReady = false
+                        runState.isCheckingBackend = true
+                        runState.backendReady = false
                         scope.launch {
                             val ok = remoteClient?.selectModel(
                                 modelId,
@@ -1573,8 +1552,8 @@ fun ModelRunScreen(
                                 resolution.height,
                             ) ?: false
                             if (!ok) {
-                                isCheckingBackend = false
-                                errorMessage = msgRemoteSelectFailed
+                                runState.isCheckingBackend = false
+                                runState.errorMessage = msgRemoteSelectFailed
                             }
                         }
                         backendRestartTrigger++
@@ -1589,8 +1568,8 @@ fun ModelRunScreen(
                                     putExtra("height", resolution.height)
                                 }
                             context.startForegroundService(serviceIntent)
-                            isCheckingBackend = true
-                            backendReady = false
+                            runState.isCheckingBackend = true
+                            runState.backendReady = false
                             backendRestartTrigger++
                         }
                     }
@@ -1613,15 +1592,15 @@ fun ModelRunScreen(
             destructiveConfirm = true,
             onConfirm = {
                 val defaults = model?.defaults ?: GenerationDefaults.GLOBAL
-                steps = defaults.steps
-                cfg = defaults.cfg
-                seed = defaults.seed
-                batchCounts = defaults.batchCounts
-                scheduler = defaults.scheduler
-                aspectRatio = defaults.aspectRatio
+                runState.steps = defaults.steps
+                runState.cfg = defaults.cfg
+                runState.seed = defaults.seed
+                runState.batchCounts = defaults.batchCounts
+                runState.scheduler = defaults.scheduler
+                runState.aspectRatio = defaults.aspectRatio
                 promptField.replaceText(defaults.prompt)
                 negativePromptField.replaceText(defaults.negativePrompt)
-                denoiseStrength = defaults.denoiseStrength
+                runState.denoiseStrength = defaults.denoiseStrength
                 scope.launch(Dispatchers.IO) {
                     generationPreferences.saveAllFields(
                         modelId = modelId,
@@ -1639,7 +1618,7 @@ fun ModelRunScreen(
                             model?.runOnCpu == true,
                         ),
                         denoiseStrength = defaults.denoiseStrength,
-                        useOpenCL = useOpenCL,
+                        useOpenCL = runState.useOpenCL,
                         batchCounts = defaults.batchCounts,
                         scheduler = defaults.scheduler,
                         aspectRatio = defaults.aspectRatio,
@@ -1660,8 +1639,8 @@ fun ModelRunScreen(
         if (isRemote) {
             val client = remoteClient
             if (client == null) {
-                isCheckingBackend = false
-                errorMessage = msgBackendFailed
+                runState.isCheckingBackend = false
+                runState.errorMessage = msgBackendFailed
                 return
             }
             checkRemoteBackendHealth(
@@ -1670,12 +1649,12 @@ fun ModelRunScreen(
                 expectedWidth = currentWidth,
                 expectedHeight = currentHeight,
                 onHealthy = {
-                    isCheckingBackend = false
-                    backendReady = true
+                    runState.isCheckingBackend = false
+                    runState.backendReady = true
                 },
                 onUnhealthy = {
-                    isCheckingBackend = false
-                    errorMessage = msgBackendFailed
+                    runState.isCheckingBackend = false
+                    runState.errorMessage = msgBackendFailed
                 },
             )
         } else {
@@ -1684,19 +1663,19 @@ fun ModelRunScreen(
                 servingModelId = BackendService.servingModelId,
                 expectedModelId = modelId,
                 onHealthy = {
-                    isCheckingBackend = false
-                    backendReady = true
+                    runState.isCheckingBackend = false
+                    runState.backendReady = true
                 },
                 onUnhealthy = {
-                    isCheckingBackend = false
-                    errorMessage = msgBackendFailed
+                    runState.isCheckingBackend = false
+                    runState.errorMessage = msgBackendFailed
                 },
             )
         }
     }
 
     // Remote mode starts its health check only after /select has been sent
-    // (in the hasInitialized effect); checking in parallel could see the host
+    // (in the runState.hasInitialized effect); checking in parallel could see the host
     // still Ready on a previous model and race the switch.
     LaunchedEffect(Unit) {
         if (!isRemote) {
@@ -1795,33 +1774,33 @@ fun ModelRunScreen(
                                     isSdxl = model?.usesFixedCanvas == true,
                                     runOnCpu = model?.runOnCpu ?: false,
                                     useImg2img = useImg2img,
-                                    isRunning = isRunning,
-                                    aspectRatio = aspectRatio,
+                                    isRunning = runState.isRunning,
+                                    aspectRatio = runState.aspectRatio,
                                     availableResolutions = availableResolutions,
                                     currentWidth = currentWidth,
                                     currentHeight = currentHeight,
-                                    scheduler = scheduler,
-                                    steps = steps,
-                                    cfg = cfg,
-                                    useOpenCL = useOpenCL,
-                                    batchCounts = batchCounts,
-                                    denoiseStrength = denoiseStrength,
-                                    seed = seed,
-                                    returnedSeed = returnedSeed,
+                                    scheduler = runState.scheduler,
+                                    steps = runState.steps,
+                                    cfg = runState.cfg,
+                                    useOpenCL = runState.useOpenCL,
+                                    batchCounts = runState.batchCounts,
+                                    denoiseStrength = runState.denoiseStrength,
+                                    seed = runState.seed,
+                                    returnedSeed = runState.returnedSeed,
                                     onAspectRatioSelected = { ratio ->
-                                        if (!isRunning && aspectRatio != ratio) {
-                                            aspectRatio = ratio
+                                        if (!runState.isRunning && runState.aspectRatio != ratio) {
+                                            runState.aspectRatio = ratio
                                             clearImg2imgState()
                                             saveAllFields()
                                         }
                                     },
                                     onCustomAspectRatioClick = {
-                                        if (!isRunning) {
-                                            showCustomAspectRatioDialog = true
+                                        if (!runState.isRunning) {
+                                            runState.showCustomAspectRatioDialog = true
                                         }
                                     },
                                     onResolutionSelected = { resolution ->
-                                        if (!isRunning &&
+                                        if (!runState.isRunning &&
                                             (
                                                 resolution.width != currentWidth ||
                                                     resolution.height != currentHeight
@@ -1832,14 +1811,14 @@ fun ModelRunScreen(
                                         }
                                     },
                                     onSchedulerChange = { value ->
-                                        scheduler = value
+                                        runState.scheduler = value
                                         saveAllFields()
                                     },
                                     onStepsChange = onStepsChange,
                                     onCfgChange = onCfgChange,
                                     onSizeChange = onSizeChange,
                                     onCpuSelected = {
-                                        useOpenCL = false
+                                        runState.useOpenCL = false
                                         saveAllFields()
                                     },
                                     onGpuSelected = { showOpenCLWarningDialog = true },
@@ -1847,7 +1826,7 @@ fun ModelRunScreen(
                                     onDenoiseStrengthChange = onDenoiseStrengthChange,
                                     onSeedChange = onSeedChange,
                                     onUseLastSeed = {
-                                        seed = returnedSeed.toString()
+                                        runState.seed = runState.returnedSeed.toString()
                                         saveAllFields()
                                     },
                                     onImportFromClipboard = {
@@ -1875,22 +1854,22 @@ fun ModelRunScreen(
                                     onShare = {
                                         val currentMode = when {
                                             isInpaintMode -> GenerationMode.INPAINT
-                                            selectedImageUri != null -> GenerationMode.IMG2IMG
+                                            runState.selectedImageUri != null -> GenerationMode.IMG2IMG
                                             else -> GenerationMode.TXT2IMG
                                         }
                                         shareState.shareSourceParams = GenerationParameters(
-                                            steps = steps.toInt(),
-                                            cfg = cfg,
-                                            seed = seed.toLongOrNull(),
+                                            steps = runState.steps.toInt(),
+                                            cfg = runState.cfg,
+                                            seed = runState.seed.toLongOrNull(),
                                             prompt = promptField.text,
                                             negativePrompt = negativePromptField.text,
                                             generationTime = null,
                                             width = currentWidth,
                                             height = currentHeight,
                                             runOnCpu = model?.runOnCpu ?: false,
-                                            denoiseStrength = denoiseStrength,
-                                            useOpenCL = useOpenCL,
-                                            scheduler = scheduler,
+                                            denoiseStrength = runState.denoiseStrength,
+                                            useOpenCL = runState.useOpenCL,
+                                            scheduler = runState.scheduler,
                                             mode = currentMode,
                                         )
                                         shareState.shareSourceModelId = modelId
@@ -1938,8 +1917,8 @@ fun ModelRunScreen(
                                     "start generation",
                                 )
                                 generationParamsTmp = GenerationParameters(
-                                    steps = steps.roundToInt(),
-                                    cfg = cfg,
+                                    steps = runState.steps.roundToInt(),
+                                    cfg = runState.cfg,
                                     seed = 0,
                                     prompt = promptField.text,
                                     negativePrompt = negativePromptField.text,
@@ -1947,23 +1926,23 @@ fun ModelRunScreen(
                                     width = currentWidth,
                                     height = currentHeight,
                                     runOnCpu = model?.runOnCpu ?: false,
-                                    denoiseStrength = denoiseStrength,
-                                    useOpenCL = useOpenCL,
-                                    scheduler = scheduler,
+                                    denoiseStrength = runState.denoiseStrength,
+                                    useOpenCL = runState.useOpenCL,
+                                    scheduler = runState.scheduler,
                                 )
 
                                 Log.d(
                                     "ModelRunScreen",
-                                    "start generation batch: $batchCounts times",
+                                    "start generation batch: ${runState.batchCounts} times",
                                 )
 
-                                // If seed is set, only generate once regardless of batch count
+                                // If runState.seed is set, only generate once regardless of batch count
                                 val actualBatchCount =
-                                    if (seed.isNotBlank()) 1 else batchCounts
+                                    if (runState.seed.isNotBlank()) 1 else runState.batchCounts
 
                                 batchGenerationJob = coroutineScope.launch {
                                     for (i in 0 until actualBatchCount) {
-                                        currentBatchIndex = i + 1
+                                        runState.currentBatchIndex = i + 1
                                         Log.d(
                                             "ModelRunScreen",
                                             "preparing batch $i",
@@ -1972,8 +1951,8 @@ fun ModelRunScreen(
                                         // Update generationParamsTmp to reflect current parameters
                                         // This allows parameters to be changed during batch execution
                                         generationParamsTmp = GenerationParameters(
-                                            steps = steps.roundToInt(),
-                                            cfg = cfg,
+                                            steps = runState.steps.roundToInt(),
+                                            cfg = runState.cfg,
                                             seed = 0,
                                             prompt = promptField.text,
                                             negativePrompt = negativePromptField.text,
@@ -1981,9 +1960,9 @@ fun ModelRunScreen(
                                             width = currentWidth,
                                             height = currentHeight,
                                             runOnCpu = model?.runOnCpu ?: false,
-                                            denoiseStrength = denoiseStrength,
-                                            useOpenCL = useOpenCL,
-                                            scheduler = scheduler,
+                                            denoiseStrength = runState.denoiseStrength,
+                                            useOpenCL = runState.useOpenCL,
+                                            scheduler = runState.scheduler,
                                         )
 
                                         val batchIntent = Intent(
@@ -1995,13 +1974,13 @@ fun ModelRunScreen(
                                                 "negative_prompt",
                                                 negativePromptField.text,
                                             )
-                                            putExtra("steps", steps.roundToInt())
-                                            putExtra("cfg", cfg)
-                                            seed.toLongOrNull()
+                                            putExtra("steps", runState.steps.roundToInt())
+                                            putExtra("cfg", runState.cfg)
+                                            runState.seed.toLongOrNull()
                                                 ?.let { putExtra("seed", it) }
                                             putExtra("width", currentWidth)
                                             putExtra("height", currentHeight)
-                                            // Backend now crops progress previews to the
+                                            // Backend now crops runState.progress previews to the
                                             // visible target rectangle, so the service must
                                             // decode each preview with the effective dims
                                             // (target_w/h), not the 1024 canvas size.
@@ -2009,15 +1988,15 @@ fun ModelRunScreen(
                                             putExtra("effective_height", effectiveHeight)
                                             putExtra(
                                                 "denoise_strength",
-                                                denoiseStrength,
+                                                runState.denoiseStrength,
                                             )
-                                            putExtra("use_opencl", useOpenCL)
-                                            putExtra("scheduler", scheduler)
-                                            putExtra("aspect_ratio", aspectRatio)
+                                            putExtra("use_opencl", runState.useOpenCL)
+                                            putExtra("scheduler", runState.scheduler)
+                                            putExtra("aspect_ratio", runState.aspectRatio)
                                             putExtra("batch_index", i)
                                             putExtra("backend_host", backendHost)
                                             backendAuthToken?.let { putExtra("auth_token", it) }
-                                            if (selectedImageUri != null && base64EncodeDone) {
+                                            if (runState.selectedImageUri != null && runState.base64EncodeDone) {
                                                 putExtra("has_image", true)
                                                 if (isInpaintMode && maskBitmap != null) {
                                                     putExtra("has_mask", true)
@@ -2072,8 +2051,8 @@ fun ModelRunScreen(
                                             "service state reset, ready for next batch",
                                         )
                                     }
-                                    currentBatchIndex = 0
-                                    isRunning = false
+                                    runState.currentBatchIndex = 0
+                                    runState.isRunning = false
                                     Log.d(
                                         "ModelRunScreen",
                                         "all batches completed, isRunning set to false",
@@ -2081,7 +2060,7 @@ fun ModelRunScreen(
                                 }
                             },
                             enabled = serviceState !is GenerationState.Progress &&
-                                !isRunning && !isUpscaling && !isUltrafixPreparing,
+                                !runState.isRunning && !isUpscaling && !isUltrafixPreparing,
                             modifier = Modifier.fillMaxWidth(),
                             shape = MaterialTheme.shapes.medium,
                         ) {
@@ -2117,13 +2096,13 @@ fun ModelRunScreen(
                 }
             }
             AnimatedVisibility(
-                visible = errorMessage != null,
+                visible = runState.errorMessage != null,
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut(),
             ) {
-                errorMessage?.let { msg ->
+                runState.errorMessage?.let { msg ->
                     Card(
-                        onClick = { errorMessage = null },
+                        onClick = { runState.errorMessage = null },
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.errorContainer,
@@ -2149,7 +2128,7 @@ fun ModelRunScreen(
                 }
             }
             AnimatedVisibility(
-                visible = isRunning,
+                visible = runState.isRunning,
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut(),
             ) {
@@ -2162,12 +2141,12 @@ fun ModelRunScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text(
-                            text = if (currentBatchIndex > 0) {
+                            text = if (runState.currentBatchIndex > 0) {
                                 "${
                                     stringResource(
                                         R.string.generating,
                                     )
-                                } ($currentBatchIndex/$batchCounts)…"
+                                } ($runState.currentBatchIndex/$runState.batchCounts)…"
                             } else {
                                 stringResource(
                                     R.string.generating,
@@ -2176,11 +2155,11 @@ fun ModelRunScreen(
                             style = MaterialTheme.typography.titleMedium,
                         )
                         SmoothLinearWavyProgressIndicator(
-                            progress = progress,
+                            progress = runState.progress,
                             modifier = Modifier.fillMaxWidth(),
                         )
                         Text(
-                            "${(progress * 100).toInt()}%",
+                            "${(runState.progress * 100).toInt()}%",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -2205,7 +2184,7 @@ fun ModelRunScreen(
             }
 
             AnimatedVisibility(
-                visible = selectedImageUri != null && base64EncodeDone,
+                visible = runState.selectedImageUri != null && runState.base64EncodeDone,
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut(),
             ) {
@@ -2236,7 +2215,7 @@ fun ModelRunScreen(
                                         contentDescription = "Cropped Image",
                                         modifier = Modifier.fillMaxSize(),
                                     )
-                                } ?: selectedImageUri?.let { uri ->
+                                } ?: runState.selectedImageUri?.let { uri ->
                                     AsyncImage(
                                         model = ImageRequest.Builder(
                                             LocalContext.current,
@@ -2250,7 +2229,7 @@ fun ModelRunScreen(
                                 }
                                 IconButton(
                                     onClick = {
-                                        selectedImageUri = null
+                                        runState.selectedImageUri = null
                                         croppedBitmap = null
                                         maskBitmap = null
                                         isInpaintMode = false
@@ -2404,7 +2383,7 @@ fun ModelRunScreen(
                     },
                     navigationIcon = {
                         IconButton(onClick = {
-                            if (isRunning) {
+                            if (runState.isRunning) {
                                 showInterruptDialog = true
                             } else {
                                 handleExit()
@@ -2453,7 +2432,7 @@ fun ModelRunScreen(
                 )
             },
         ) { paddingValues ->
-            if (model == null && isRemote && !isCheckingBackend) {
+            if (model == null && isRemote && !runState.isCheckingBackend) {
                 // Process recreation with the host unreachable (or the model
                 // removed from it): the catalog re-fetch failed, so there is
                 // no model to render. Show an explicit state instead of an
@@ -2501,28 +2480,28 @@ fun ModelRunScreen(
                             showUpscaleButton = !model.runOnCpu &&
                                 (!isRemote || remoteRepository.upscalerPaths.isNotEmpty()) &&
                                 generationParams?.let { maxOf(it.width, it.height) <= 1024 } == true,
-                            upscaleEnabled = !isRunning && !isUpscaling && !isUltrafixPreparing,
+                            upscaleEnabled = !runState.isRunning && !isUpscaling && !isUltrafixPreparing,
                             // Ultrafix takes over where upscaling stops: SDXL
                             // only (SD1.5 quality was not worth it), restricted
                             // to DMD2-class few-step checkpoints (detected via
-                            // cfg = 1 - the inversion/injection recipe is tuned
+                            // runState.cfg = 1 - the inversion/injection recipe is tuned
                             // for that regime), image larger than the upscale
                             // ceiling, every UNet/VAE tile fitting inside the
                             // shorter edge, and a backend started with its VAE
                             // encoder (useImg2img).
                             showUltrafixButton = useImg2img && model.isSdxl &&
-                                cfg == 1f &&
+                                runState.cfg == 1f &&
                                 generationParams?.let {
                                     maxOf(it.width, it.height) > 1024 &&
                                         minOf(it.width, it.height) >=
                                         maxOf(currentWidth, currentHeight, 512)
                                 } == true,
-                            ultrafixEnabled = !isRunning && !isUpscaling && !isUltrafixPreparing,
+                            ultrafixEnabled = !runState.isRunning && !isUpscaling && !isUltrafixPreparing,
                             // The upscale button also exists on models that
                             // can't run UltraFix (SD1.5 NPU); its long press
                             // only opens the import dialog when the model can.
                             onUpscaleLongClick = {
-                                if (useImg2img && model.isSdxl && cfg == 1f) {
+                                if (useImg2img && model.isSdxl && runState.cfg == 1f) {
                                     showUltrafixImportDialog = true
                                 }
                             },
@@ -2647,7 +2626,7 @@ fun ModelRunScreen(
             }
         }
         if (showCropScreen && imageUriForCrop != null) {
-            val aspectTarget = computeAspectTargetSize(model?.usesFixedCanvas == true, aspectRatio)
+            val aspectTarget = computeAspectTargetSize(model?.usesFixedCanvas == true, runState.aspectRatio)
             val cropW = aspectTarget?.first ?: currentWidth
             val cropH = aspectTarget?.second ?: currentHeight
             CropImageScreen(
@@ -2660,7 +2639,7 @@ fun ModelRunScreen(
                 onCancel = {
                     showCropScreen = false
                     imageUriForCrop = null
-                    selectedImageUri = null
+                    runState.selectedImageUri = null
                     hasOriginalImageForStitch = false
                 },
             )
@@ -2814,7 +2793,7 @@ fun ModelRunScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
 
-                    // Independent UltraFix steps (1..20). Lowering steps also
+                    // Independent UltraFix runState.steps (1..20). Lowering runState.steps also
                     // tightens the denoise-step cap below.
                     val denoiseStepsMax =
                         minOf(GenerationDefaults.ULTRAFIX_DENOISE_STEPS_MAX, ultrafixSteps.roundToInt())
@@ -2836,8 +2815,8 @@ fun ModelRunScreen(
                         modifier = Modifier.fillMaxWidth(),
                     )
 
-                    // Independent UltraFix denoise steps (0..min(10, steps)):
-                    // how many of the total steps actually denoise.
+                    // Independent UltraFix denoise runState.steps (0..min(10, runState.steps)):
+                    // how many of the total runState.steps actually denoise.
                     Text(
                         stringResource(R.string.ultrafix_denoise_steps_label, ultrafixDenoiseSteps),
                         style = MaterialTheme.typography.bodyMedium,
@@ -3042,7 +3021,7 @@ fun ModelRunScreen(
         )
     }
 
-    BlockingProgressOverlay(visible = isCheckingBackend) {
+    BlockingProgressOverlay(visible = runState.isCheckingBackend) {
         ContainedLoadingIndicator()
         Text(
             text = stringResource(R.string.loading_model),
@@ -3099,13 +3078,13 @@ fun ModelRunScreen(
         // click path loads the item into the result-page state (exactly like
         // tapping a thumbnail) and reuses the regular upscale/ultrafix flows.
         val detailItem = historyState.selectedHistoryItem
-        val detailIdle = !isRunning && !isUpscaling && !isUltrafixPreparing
+        val detailIdle = !runState.isRunning && !isUpscaling && !isUltrafixPreparing
         val detailCanUpscale = historyBitmap != null && detailItem != null &&
             detailIdle && model?.runOnCpu == false &&
             (!isRemote || remoteRepository.upscalerPaths.isNotEmpty()) &&
             maxOf(detailItem.params.width, detailItem.params.height) <= 1024
         val detailCanUltrafix = historyBitmap != null && detailItem != null &&
-            detailIdle && useImg2img && model?.isSdxl == true && cfg == 1f &&
+            detailIdle && useImg2img && model?.isSdxl == true && runState.cfg == 1f &&
             maxOf(detailItem.params.width, detailItem.params.height) > 1024 &&
             minOf(detailItem.params.width, detailItem.params.height) >=
             maxOf(currentWidth, currentHeight, 512)
@@ -3264,7 +3243,7 @@ fun ModelRunScreen(
                     negativePromptField.replaceText(params.negativePrompt)
                 }
                 // An UltraFix image was produced by the tiled img2img repair pass,
-                // whose steps/denoise live in their own UltraFix variables. Route
+                // whose runState.steps/denoise live in their own UltraFix variables. Route
                 // the reproduced values there (denoise is stored as a strength but
                 // edited as a step count) instead of the prompt-page settings.
                 val isUltrafixParams = params.mode == GenerationMode.ULTRAFIX
@@ -3277,21 +3256,21 @@ fun ModelRunScreen(
                         )
                         ultrafixDenoiseSteps = ultrafixDenoiseSteps.coerceIn(0, maxDenoiseSteps)
                     } else {
-                        steps = params.steps.toFloat()
+                        runState.steps = params.steps.toFloat()
                     }
                 }
                 if (ParamShareField.CFG in selectedFields) {
-                    cfg = params.cfg
+                    runState.cfg = params.cfg
                 }
                 if (ParamShareField.SEED in selectedFields) {
-                    seed = params.seed?.toString() ?: ""
+                    runState.seed = params.seed?.toString() ?: ""
                 }
                 if (ParamShareField.SCHEDULER in selectedFields) {
-                    scheduler = params.scheduler
+                    runState.scheduler = params.scheduler
                 }
                 if (ParamShareField.DENOISE_STRENGTH in selectedFields) {
                     if (isUltrafixParams) {
-                        // Invert strength = (steps - 0.5) / total -> steps.
+                        // Invert strength = (runState.steps - 0.5) / total -> runState.steps.
                         val total = params.steps
                         val maxDenoiseSteps = minOf(
                             GenerationDefaults.ULTRAFIX_DENOISE_STEPS_MAX,
@@ -3301,7 +3280,7 @@ fun ModelRunScreen(
                             (params.denoiseStrength * total + 0.5f).roundToInt()
                                 .coerceIn(0, maxDenoiseSteps)
                     } else {
-                        denoiseStrength = params.denoiseStrength
+                        runState.denoiseStrength = params.denoiseStrength
                     }
                 }
                 if (isUltrafixParams) {
@@ -3309,8 +3288,8 @@ fun ModelRunScreen(
                 }
                 if (model?.usesFixedCanvas == true && useImg2img) {
                     val newRatio = inferAspectRatioString(params.width, params.height)
-                    if (newRatio != aspectRatio) {
-                        aspectRatio = newRatio
+                    if (newRatio != runState.aspectRatio) {
+                        runState.aspectRatio = newRatio
                         clearImg2imgState()
                     }
                 }
@@ -3439,7 +3418,7 @@ fun ModelRunScreen(
         )
     }
 
-    // Batch save progress dialog (modal — blocks other interactions)
+    // Batch save runState.progress dialog (modal — blocks other interactions)
     if (historyState.isBatchSaving) {
         BatchSaveProgressDialog(current = historyState.batchSaveCurrent, total = historyState.batchSaveTotal)
     }
@@ -3488,15 +3467,15 @@ fun ModelRunScreen(
 
     // Detect shared params on the clipboard once the model is ready. Remote
     // mode has no local backend, so readiness is the health check finishing.
-    LaunchedEffect(backendState, hasInitialized, isCheckingBackend) {
-        val backendReady = if (isRemote) {
-            !isCheckingBackend && errorMessage == null
+    LaunchedEffect(backendState, runState.hasInitialized, runState.isCheckingBackend) {
+        val clipboardCheckReady = if (isRemote) {
+            !runState.isCheckingBackend && runState.errorMessage == null
         } else {
             backendState is BackendService.BackendState.Running
         }
         if (!shareState.clipboardImportChecked &&
-            hasInitialized &&
-            backendReady
+            runState.hasInitialized &&
+            clipboardCheckReady
         ) {
             shareState.clipboardImportChecked = true
             val clipboard =
@@ -3556,21 +3535,21 @@ fun ModelRunScreen(
                 }
                 if (ParamShareField.STEPS in selectedFields) {
                     imported.steps?.let {
-                        steps = it.toFloat().coerceIn(GenerationDefaults.STEPS_RANGE)
+                        runState.steps = it.toFloat().coerceIn(GenerationDefaults.STEPS_RANGE)
                     }
                 }
                 if (ParamShareField.CFG in selectedFields) {
-                    imported.cfg?.let { cfg = it.coerceIn(GenerationDefaults.CFG_RANGE) }
+                    imported.cfg?.let { runState.cfg = it.coerceIn(GenerationDefaults.CFG_RANGE) }
                 }
                 if (ParamShareField.SEED in selectedFields) {
-                    seed = imported.seed?.toString() ?: ""
+                    runState.seed = imported.seed?.toString() ?: ""
                 }
                 if (ParamShareField.SCHEDULER in selectedFields) {
-                    imported.scheduler?.let { scheduler = it }
+                    imported.scheduler?.let { runState.scheduler = it }
                 }
                 if (ParamShareField.DENOISE_STRENGTH in selectedFields) {
                     imported.denoiseStrength?.let {
-                        denoiseStrength = it.coerceIn(GenerationDefaults.DENOISE_RANGE)
+                        runState.denoiseStrength = it.coerceIn(GenerationDefaults.DENOISE_RANGE)
                     }
                 }
                 saveAllFields()
