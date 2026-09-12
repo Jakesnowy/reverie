@@ -135,6 +135,7 @@ import io.github.xororz.localdream.data.Resolution
 import io.github.xororz.localdream.data.TagAutocompleteRepository
 import io.github.xororz.localdream.data.TagMatchType
 import io.github.xororz.localdream.data.TagSuggestion
+import io.github.xororz.localdream.data.UpscalerModel
 import io.github.xororz.localdream.data.UpscalerRepository
 import io.github.xororz.localdream.service.BackendService
 import io.github.xororz.localdream.service.BackgroundGenerationService
@@ -455,9 +456,10 @@ fun ModelRunScreen(
     var saveAllJob: Job? by remember { mutableStateOf(null) }
     var batchGenerationJob: Job? by remember { mutableStateOf(null) }
 
-    // Upscaler related states
-    var showUpscalerDialog by remember { mutableStateOf(false) }
-    var isUpscaling by remember { mutableStateOf(false) }
+    // Upscaler state; the dialog region (RunUpscaleDialogs) reads these
+    // fields inside its own recompose scope so flag flips don't recompose
+    // the orchestrator.
+    val upscaleState = remember { RunUpscaleState() }
 
     // Ultrafix (tiled img2img repair of an upscaled image) state; the dialog
     // region (RunUltrafixDialogs) reads these fields inside its own recompose
@@ -2029,12 +2031,12 @@ fun ModelRunScreen(
                                 }
                             },
                             enabled = serviceState !is GenerationState.Progress &&
-                                !runState.isRunning && !isUpscaling && !ultrafixState.isUltrafixPreparing,
+                                !runState.isRunning && !upscaleState.isUpscaling && !ultrafixState.isUltrafixPreparing,
                             modifier = Modifier.fillMaxWidth(),
                             shape = MaterialTheme.shapes.medium,
                         ) {
                             AnimatedContent(
-                                targetState = serviceState is GenerationState.Progress || isUpscaling,
+                                targetState = serviceState is GenerationState.Progress || upscaleState.isUpscaling,
                                 transitionSpec = {
                                     (
                                         fadeIn(animationSpec = tween(Motion.DurationShort)) + scaleIn(
@@ -2449,7 +2451,7 @@ fun ModelRunScreen(
                             showUpscaleButton = !model.runOnCpu &&
                                 (!isRemote || remoteRepository.upscalerPaths.isNotEmpty()) &&
                                 resultState.generationParams?.let { maxOf(it.width, it.height) <= 1024 } == true,
-                            upscaleEnabled = !runState.isRunning && !isUpscaling && !ultrafixState.isUltrafixPreparing,
+                            upscaleEnabled = !runState.isRunning && !upscaleState.isUpscaling && !ultrafixState.isUltrafixPreparing,
                             // Ultrafix takes over where upscaling stops: SDXL
                             // only (SD1.5 quality was not worth it), restricted
                             // to DMD2-class few-step checkpoints (detected via
@@ -2465,7 +2467,7 @@ fun ModelRunScreen(
                                         minOf(it.width, it.height) >=
                                         maxOf(setupState.currentWidth, setupState.currentHeight, 512)
                                 } == true,
-                            ultrafixEnabled = !runState.isRunning && !isUpscaling && !ultrafixState.isUltrafixPreparing,
+                            ultrafixEnabled = !runState.isRunning && !upscaleState.isUpscaling && !ultrafixState.isUltrafixPreparing,
                             // The upscale button also exists on models that
                             // can't run UltraFix (SD1.5 NPU); its long press
                             // only opens the import dialog when the model can.
@@ -2490,7 +2492,7 @@ fun ModelRunScreen(
                                 }
                             },
                             onReportClick = { setupState.showReportDialog = true },
-                            onUpscaleClick = { showUpscalerDialog = true },
+                            onUpscaleClick = { upscaleState.showUpscalerDialog = true },
                             onUltrafixClick = { ultrafixState.showUltrafixConfirmDialog = true },
                             onSaveClick = { bitmap ->
                                 handleSaveImage(
@@ -2729,110 +2731,103 @@ fun ModelRunScreen(
         applyUltrafixImport = { applyUltrafixImport(it) },
     )
 
-    // Upscaler dialog
-    if (showUpscalerDialog) {
-        UpscalerPickerFlow(
-            modelId = modelId,
-            upscalerRepository = upscalerRepository,
-            upscalerPreferences = upscalerPreferences,
-            upscalersOverride = if (isRemote) remoteRepository.remoteUpscalers() else null,
-            onDismiss = { showUpscalerDialog = false },
-            onUpscalerConfirmed = { selectedUpscaler, selectedScale ->
-                showUpscalerDialog = false
+    // Runs the confirmed upscale over the currently displayed bitmap and
+    // saves the result (DB + JPG) via HistoryManager.
+    fun runUpscale(selectedUpscaler: UpscalerModel, selectedScale: Int) {
+        // Execute upscale
+        resultState.currentBitmap?.let { bitmap ->
+            // If the source image is stitch-eligible (an inpaint result or
+            // an upscaled copy of one), its upscaled copy is too.
+            val sourceIsStitchable =
+                resultState.currentDisplayedHistoryId != null &&
+                    resultState.currentDisplayedHistoryId in resultState.stitchableHistoryIds
+            upscaleState.isUpscaling = true
+            scope.launch {
+                try {
+                    val upscaledBitmap = performUpscale(
+                        context = context,
+                        bitmap = bitmap,
+                        upscalerId = selectedUpscaler.id,
+                        targetScale = selectedScale,
+                        backendHost = backendHost,
+                        remoteUpscalerPath = if (isRemote) {
+                            remoteRepository.upscalerPaths[selectedUpscaler.id]
+                        } else {
+                            null
+                        },
+                    )
 
-                // Execute upscale
-                resultState.currentBitmap?.let { bitmap ->
-                    // If the source image is stitch-eligible (an inpaint result or
-                    // an upscaled copy of one), its upscaled copy is too.
-                    val sourceIsStitchable =
-                        resultState.currentDisplayedHistoryId != null &&
-                            resultState.currentDisplayedHistoryId in resultState.stitchableHistoryIds
-                    isUpscaling = true
-                    scope.launch {
-                        try {
-                            val upscaledBitmap = performUpscale(
-                                context = context,
-                                bitmap = bitmap,
-                                upscalerId = selectedUpscaler.id,
-                                targetScale = selectedScale,
-                                backendHost = backendHost,
-                                remoteUpscalerPath = if (isRemote) {
-                                    remoteRepository.upscalerPaths[selectedUpscaler.id]
-                                } else {
-                                    null
-                                },
-                            )
-
-                            // Save upscaled image via HistoryManager (DB + JPG file)
-                            resultState.generationParams?.let { params ->
-                                scope.launch(Dispatchers.IO) {
-                                    try {
-                                        val updatedParams = params.copy(
-                                            width = upscaledBitmap.width,
-                                            height = upscaledBitmap.height,
-                                        )
-                                        // The displayed image's params carry its
-                                        // generation mode (set on completion and
-                                        // by every history-load path), so the
-                                        // upscaled copy inherits the right one.
-                                        val sourceMode = params.mode
-                                        val saved = historyManager.saveGeneratedImage(
-                                            modelId = modelId,
-                                            bitmap = upscaledBitmap,
-                                            params = updatedParams,
-                                            mode = sourceMode,
-                                            upscalerId = selectedUpscaler.id,
-                                        )
-                                        if (saved != null) {
-                                            withContext(Dispatchers.Main) {
-                                                resultState.currentBitmap = upscaledBitmap
-                                                resultState.generationParams = updatedParams
-                                                resultState.generationParamsModelId = modelId
-                                                resultState.currentDisplayedHistoryId = saved.id
-                                                if (sourceIsStitchable) {
-                                                    resultState.stitchableHistoryIds =
-                                                        resultState.stitchableHistoryIds + saved.id
-                                                }
-                                                resultState.imageVersion++
-                                            }
+                    // Save upscaled image via HistoryManager (DB + JPG file)
+                    resultState.generationParams?.let { params ->
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                val updatedParams = params.copy(
+                                    width = upscaledBitmap.width,
+                                    height = upscaledBitmap.height,
+                                )
+                                // The displayed image's params carry its
+                                // generation mode (set on completion and
+                                // by every history-load path), so the
+                                // upscaled copy inherits the right one.
+                                val sourceMode = params.mode
+                                val saved = historyManager.saveGeneratedImage(
+                                    modelId = modelId,
+                                    bitmap = upscaledBitmap,
+                                    params = updatedParams,
+                                    mode = sourceMode,
+                                    upscalerId = selectedUpscaler.id,
+                                )
+                                if (saved != null) {
+                                    withContext(Dispatchers.Main) {
+                                        resultState.currentBitmap = upscaledBitmap
+                                        resultState.generationParams = updatedParams
+                                        resultState.generationParamsModelId = modelId
+                                        resultState.currentDisplayedHistoryId = saved.id
+                                        if (sourceIsStitchable) {
+                                            resultState.stitchableHistoryIds =
+                                                resultState.stitchableHistoryIds + saved.id
                                         }
-                                    } catch (e: Exception) {
-                                        Log.e(
-                                            "ModelRunScreen",
-                                            "Failed to save upscaled image",
-                                            e,
-                                        )
+                                        resultState.imageVersion++
                                     }
                                 }
+                            } catch (e: Exception) {
+                                Log.e(
+                                    "ModelRunScreen",
+                                    "Failed to save upscaled image",
+                                    e,
+                                )
                             }
-                        } catch (e: Exception) {
-                            Toast.makeText(
-                                context,
-                                msgUpscaleFailed.format(e.message ?: "Unknown error"),
-                                Toast.LENGTH_SHORT,
-                            ).show()
-                        } finally {
-                            isUpscaling = false
                         }
                     }
+                } catch (e: Exception) {
+                    Toast.makeText(
+                        context,
+                        msgUpscaleFailed.format(e.message ?: "Unknown error"),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                } finally {
+                    upscaleState.isUpscaling = false
                 }
-            },
-        )
+            }
+        }
     }
+
+    // Upscaler dialog region (picker flow + upscaling overlay). Reads its
+    // state holder inside its own recompose scope so flag flips don't
+    // recompose the orchestrator; execution stays here as a callback.
+    RunUpscaleDialogs(
+        upscaleState = upscaleState,
+        modelId = modelId,
+        upscalerRepository = upscalerRepository,
+        upscalerPreferences = upscalerPreferences,
+        upscalersOverride = if (isRemote) remoteRepository.remoteUpscalers() else null,
+        onUpscaleConfirmed = { upscaler, scale -> runUpscale(upscaler, scale) },
+    )
 
     BlockingProgressOverlay(visible = runState.isCheckingBackend) {
         ContainedLoadingIndicator()
         Text(
             text = stringResource(R.string.loading_model),
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-    }
-
-    BlockingProgressOverlay(visible = isUpscaling) {
-        ContainedLoadingIndicator()
-        Text(
-            text = stringResource(R.string.upscaling_image),
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurface,
         )
@@ -2868,7 +2863,7 @@ fun ModelRunScreen(
         // click path loads the item into the result-page state (exactly like
         // tapping a thumbnail) and reuses the regular upscale/ultrafix flows.
         val detailItem = historyState.selectedHistoryItem
-        val detailIdle = !runState.isRunning && !isUpscaling && !ultrafixState.isUltrafixPreparing
+        val detailIdle = !runState.isRunning && !upscaleState.isUpscaling && !ultrafixState.isUltrafixPreparing
         val detailCanUpscale = historyBitmap != null && detailItem != null &&
             detailIdle && model?.runOnCpu == false &&
             (!isRemote || remoteRepository.upscalerPaths.isNotEmpty()) &&
@@ -2927,7 +2922,7 @@ fun ModelRunScreen(
                         contentDescription = "upscale image",
                         onClick = {
                             if (loadDetailIntoResult()) {
-                                showUpscalerDialog = true
+                                upscaleState.showUpscalerDialog = true
                             }
                         },
                     )
