@@ -68,10 +68,8 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -86,9 +84,7 @@ import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
 import androidx.compose.material3.SmallFloatingActionButton
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
@@ -98,8 +94,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -465,35 +459,22 @@ fun ModelRunScreen(
     var showUpscalerDialog by remember { mutableStateOf(false) }
     var isUpscaling by remember { mutableStateOf(false) }
 
-    // Ultrafix (tiled img2img repair of an upscaled image) states.
-    // pendingUltrafix marks the in-flight generation as an ultrafix run so the
-    // completion handler can record the right mode.
-    var showUltrafixConfirmDialog by remember { mutableStateOf(false) }
-    var showUltrafixImportDialog by remember { mutableStateOf(false) }
-    var pendingUltrafix by remember { mutableStateOf(false) }
-    var isUltrafixPreparing by remember { mutableStateOf(false) }
-    // UltraFix runs with its own runState.steps/denoise (defaults 10 / 0.4), persisted
-    // globally and kept independent of the main generation params so tweaking
-    // them in the UltraFix dialog never touches the prompt-page settings.
-    var ultrafixSteps by remember { mutableFloatStateOf(GenerationDefaults.GLOBAL.ultrafixSteps) }
-    // Denoise is controlled as a step count (0..min(10, runState.steps)); the backend
-    // strength is derived from it at run time.
-    var ultrafixDenoiseSteps by remember {
-        mutableIntStateOf(GenerationDefaults.GLOBAL.ultrafixDenoiseSteps)
-    }
-    // On (default): UltraFix runs on neutral quality tags instead of the
-    // prompt-page prompt. Off: uses the prompt-page prompt (legacy behavior).
-    var ultrafixQualityDenoise by remember {
-        mutableStateOf(GenerationDefaults.GLOBAL.ultrafixQualityDenoise)
-    }
-    var ultrafixSaveJob: Job? by remember { mutableStateOf(null) }
+    // Ultrafix (tiled img2img repair of an upscaled image) state; the dialog
+    // region (RunUltrafixDialogs) reads these fields inside its own recompose
+    // scope so flag flips don't recompose the orchestrator. pendingUltrafix
+    // marks the in-flight generation as an ultrafix run so the completion
+    // handler can record the right mode; UltraFix runs with its own
+    // steps/denoise (defaults 10 / 0.4), persisted globally and kept
+    // independent of the main generation params so tweaking them in the
+    // UltraFix dialog never touches the prompt-page settings.
+    val ultrafixState = remember { RunUltrafixState() }
     LaunchedEffect(Unit) {
-        ultrafixSteps = generationPreferences.observeUltrafixSteps(modelId).first()
+        ultrafixState.ultrafixSteps = generationPreferences.observeUltrafixSteps(modelId).first()
         val maxDenoiseSteps =
-            minOf(GenerationDefaults.ULTRAFIX_DENOISE_STEPS_MAX, ultrafixSteps.roundToInt())
-        ultrafixDenoiseSteps =
+            minOf(GenerationDefaults.ULTRAFIX_DENOISE_STEPS_MAX, ultrafixState.ultrafixSteps.roundToInt())
+        ultrafixState.ultrafixDenoiseSteps =
             generationPreferences.observeUltrafixDenoiseSteps(modelId).first().coerceIn(0, maxDenoiseSteps)
-        ultrafixQualityDenoise = generationPreferences.observeUltrafixQualityDenoise(modelId).first()
+        ultrafixState.ultrafixQualityDenoise = generationPreferences.observeUltrafixQualityDenoise(modelId).first()
     }
     val upscalerRepository = remember { UpscalerRepository.getInstance(context) }
     val upscalerPreferences =
@@ -543,14 +524,14 @@ fun ModelRunScreen(
     }
 
     fun saveUltrafixParams() {
-        ultrafixSaveJob?.cancel()
-        ultrafixSaveJob = scope.launch(Dispatchers.IO) {
+        ultrafixState.ultrafixSaveJob?.cancel()
+        ultrafixState.ultrafixSaveJob = scope.launch(Dispatchers.IO) {
             delay(500)
             generationPreferences.saveUltrafixParams(
                 modelId,
-                ultrafixSteps,
-                ultrafixDenoiseSteps,
-                ultrafixQualityDenoise,
+                ultrafixState.ultrafixSteps,
+                ultrafixState.ultrafixDenoiseSteps,
+                ultrafixState.ultrafixQualityDenoise,
             )
         }
     }
@@ -855,15 +836,15 @@ fun ModelRunScreen(
     fun startUltrafix() {
         val bmp = resultState.currentBitmap ?: return
         val tileSize = maxOf(setupState.currentWidth, setupState.currentHeight)
-        val totalSteps = ultrafixSteps.roundToInt()
+        val totalSteps = ultrafixState.ultrafixSteps.roundToInt()
         // Derive the strength that makes the backend run exactly the chosen
         // number of denoise runState.steps (clamped to the total).
-        val ultrafixDenoiseStrength = ultrafixDenoiseStrength(ultrafixDenoiseSteps, totalSteps)
+        val ultrafixDenoiseStrength = ultrafixDenoiseStrength(ultrafixState.ultrafixDenoiseSteps, totalSteps)
         // When quality-denoise is on (default), UltraFix runs on neutral quality
         // tags instead of the prompt-page prompt; off uses the box prompt.
         val ultrafixPrompt =
-            if (ultrafixQualityDenoise) GenerationDefaults.ULTRAFIX_QUALITY_PROMPT else promptField.text
-        isUltrafixPreparing = true
+            if (ultrafixState.ultrafixQualityDenoise) GenerationDefaults.ULTRAFIX_QUALITY_PROMPT else promptField.text
+        ultrafixState.isUltrafixPreparing = true
         setupState.generationParamsTmp = GenerationParameters(
             steps = totalSteps,
             cfg = runState.cfg,
@@ -891,7 +872,7 @@ fun ModelRunScreen(
                 withContext(Dispatchers.IO) {
                     File(context.filesDir, "ultrafix.txt").writeText(bitmapToBase64Jpeg(bmp))
                 }
-                pendingUltrafix = true
+                ultrafixState.pendingUltrafix = true
                 val intent = Intent(context, BackgroundGenerationService::class.java).apply {
                     putExtra("prompt", ultrafixPrompt)
                     putExtra("negative_prompt", negativePromptField.text)
@@ -914,7 +895,7 @@ fun ModelRunScreen(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                pendingUltrafix = false
+                ultrafixState.pendingUltrafix = false
                 Toast.makeText(
                     context,
                     msgUltrafixFailed.format(e.message ?: "Unknown error"),
@@ -922,7 +903,7 @@ fun ModelRunScreen(
                 ).show()
                 false
             } finally {
-                isUltrafixPreparing = false
+                ultrafixState.isUltrafixPreparing = false
             }
             if (!started) return@launch
 
@@ -1140,7 +1121,7 @@ fun ModelRunScreen(
         BackgroundGenerationService.stop(context)
         BackgroundGenerationService.resetState()
         resultState.intermediateBitmap = null
-        pendingUltrafix = false
+        ultrafixState.pendingUltrafix = false
         runState.isRunning = false
         runState.progress = 0f
         runState.currentBatchIndex = 0
@@ -1347,8 +1328,8 @@ fun ModelRunScreen(
                         }
                     }
 
-                    val wasUltrafix = pendingUltrafix
-                    pendingUltrafix = false
+                    val wasUltrafix = ultrafixState.pendingUltrafix
+                    ultrafixState.pendingUltrafix = false
                     val currentGenerationMode = when {
                         wasUltrafix -> GenerationMode.ULTRAFIX
                         isInpaintMode -> GenerationMode.INPAINT
@@ -1438,7 +1419,7 @@ fun ModelRunScreen(
                 runState.isRunning = false
                 runState.progress = 0f
                 runState.generationStartTime = null
-                pendingUltrafix = false
+                ultrafixState.pendingUltrafix = false
             }
 
             else -> {
@@ -1899,7 +1880,7 @@ fun ModelRunScreen(
                         Button(
                             onClick = {
                                 focusManager.clearFocus()
-                                pendingUltrafix = false
+                                ultrafixState.pendingUltrafix = false
                                 Log.d(
                                     "ModelRunScreen",
                                     "start generation",
@@ -2048,7 +2029,7 @@ fun ModelRunScreen(
                                 }
                             },
                             enabled = serviceState !is GenerationState.Progress &&
-                                !runState.isRunning && !isUpscaling && !isUltrafixPreparing,
+                                !runState.isRunning && !isUpscaling && !ultrafixState.isUltrafixPreparing,
                             modifier = Modifier.fillMaxWidth(),
                             shape = MaterialTheme.shapes.medium,
                         ) {
@@ -2468,7 +2449,7 @@ fun ModelRunScreen(
                             showUpscaleButton = !model.runOnCpu &&
                                 (!isRemote || remoteRepository.upscalerPaths.isNotEmpty()) &&
                                 resultState.generationParams?.let { maxOf(it.width, it.height) <= 1024 } == true,
-                            upscaleEnabled = !runState.isRunning && !isUpscaling && !isUltrafixPreparing,
+                            upscaleEnabled = !runState.isRunning && !isUpscaling && !ultrafixState.isUltrafixPreparing,
                             // Ultrafix takes over where upscaling stops: SDXL
                             // only (SD1.5 quality was not worth it), restricted
                             // to DMD2-class few-step checkpoints (detected via
@@ -2484,16 +2465,16 @@ fun ModelRunScreen(
                                         minOf(it.width, it.height) >=
                                         maxOf(setupState.currentWidth, setupState.currentHeight, 512)
                                 } == true,
-                            ultrafixEnabled = !runState.isRunning && !isUpscaling && !isUltrafixPreparing,
+                            ultrafixEnabled = !runState.isRunning && !isUpscaling && !ultrafixState.isUltrafixPreparing,
                             // The upscale button also exists on models that
                             // can't run UltraFix (SD1.5 NPU); its long press
                             // only opens the import dialog when the model can.
                             onUpscaleLongClick = {
                                 if (useImg2img && model.isSdxl && runState.cfg == 1f) {
-                                    showUltrafixImportDialog = true
+                                    ultrafixState.showUltrafixImportDialog = true
                                 }
                             },
-                            onUltrafixLongClick = { showUltrafixImportDialog = true },
+                            onUltrafixLongClick = { ultrafixState.showUltrafixImportDialog = true },
                             isFavorite = if (resultState.currentDisplayedHistoryId != null) {
                                 displayedFavorite
                             } else {
@@ -2510,7 +2491,7 @@ fun ModelRunScreen(
                             },
                             onReportClick = { setupState.showReportDialog = true },
                             onUpscaleClick = { showUpscalerDialog = true },
-                            onUltrafixClick = { showUltrafixConfirmDialog = true },
+                            onUltrafixClick = { ultrafixState.showUltrafixConfirmDialog = true },
                             onSaveClick = { bitmap ->
                                 handleSaveImage(
                                     context = context,
@@ -2732,191 +2713,21 @@ fun ModelRunScreen(
         )
     }
 
-    // Import-and-resize a local image for UltraFix. A confirmed image that
-    // already satisfies the UltraFix window goes straight to the parameter
-    // dialog; a smaller one just lands on the result page, where the visible
-    // upscale button is the natural next step.
-    if (showUltrafixImportDialog) {
-        UltrafixImportDialog(
-            tileSize = maxOf(setupState.currentWidth, setupState.currentHeight, 512),
-            onDismiss = { showUltrafixImportDialog = false },
-            onConfirm = { bitmap ->
-                applyUltrafixImport(bitmap)
-                showUltrafixImportDialog = false
-                val tile = maxOf(setupState.currentWidth, setupState.currentHeight, 512)
-                if (maxOf(bitmap.width, bitmap.height) > 1024 &&
-                    minOf(bitmap.width, bitmap.height) >= tile
-                ) {
-                    showUltrafixConfirmDialog = true
-                }
-            },
-        )
-    }
-
-    // Ultrafix parameter confirmation.
-    if (showUltrafixConfirmDialog) {
-        AlertDialog(
-            onDismissRequest = { showUltrafixConfirmDialog = false },
-            title = { Text(stringResource(R.string.ultrafix)) },
-            text = {
-                Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(stringResource(R.string.ultrafix_confirm_hint))
-                    Text(
-                        stringResource(
-                            R.string.ultrafix_source_info,
-                            resultState.currentBitmap?.width ?: 0,
-                            resultState.currentBitmap?.height ?: 0,
-                            maxOf(setupState.currentWidth, setupState.currentHeight),
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-
-                    Text(
-                        stringResource(R.string.ultrafix_longpress_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-
-                    // Independent UltraFix runState.steps (1..20). Lowering runState.steps also
-                    // tightens the denoise-step cap below.
-                    val denoiseStepsMax =
-                        minOf(GenerationDefaults.ULTRAFIX_DENOISE_STEPS_MAX, ultrafixSteps.roundToInt())
-                    Text(
-                        stringResource(R.string.steps, ultrafixSteps.roundToInt()),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Slider(
-                        value = ultrafixSteps,
-                        onValueChange = {
-                            ultrafixSteps = it
-                            val newMax =
-                                minOf(GenerationDefaults.ULTRAFIX_DENOISE_STEPS_MAX, it.roundToInt())
-                            if (ultrafixDenoiseSteps > newMax) ultrafixDenoiseSteps = newMax
-                            saveUltrafixParams()
-                        },
-                        valueRange = GenerationDefaults.ULTRAFIX_STEPS_MIN..GenerationDefaults.ULTRAFIX_STEPS_MAX,
-                        steps = 18,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-
-                    // Independent UltraFix denoise runState.steps (0..min(10, runState.steps)):
-                    // how many of the total runState.steps actually denoise.
-                    Text(
-                        stringResource(R.string.ultrafix_denoise_steps_label, ultrafixDenoiseSteps),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Slider(
-                        value = ultrafixDenoiseSteps.toFloat(),
-                        onValueChange = {
-                            ultrafixDenoiseSteps = it.roundToInt()
-                            saveUltrafixParams()
-                        },
-                        valueRange = 0f..denoiseStepsMax.toFloat(),
-                        steps = (denoiseStepsMax - 1).coerceAtLeast(0),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-
-                    // Quality-denoise toggle: run UltraFix on neutral quality
-                    // tags instead of the prompt-page prompt. On by default.
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            stringResource(
-                                R.string.ultrafix_quality_denoise_desc,
-                                GenerationDefaults.ULTRAFIX_QUALITY_PROMPT,
-                            ),
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Switch(
-                            checked = ultrafixQualityDenoise,
-                            onCheckedChange = {
-                                ultrafixQualityDenoise = it
-                                saveUltrafixParams()
-                            },
-                        )
-                    }
-
-                    TextButton(
-                        onClick = {
-                            ultrafixSteps = GenerationDefaults.GLOBAL.ultrafixSteps
-                            ultrafixDenoiseSteps = GenerationDefaults.GLOBAL.ultrafixDenoiseSteps
-                            ultrafixQualityDenoise = GenerationDefaults.GLOBAL.ultrafixQualityDenoise
-                            saveUltrafixParams()
-                        },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                    ) {
-                        Icon(
-                            Icons.Default.Refresh,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(stringResource(R.string.ultrafix_restore_defaults))
-                    }
-
-                    Text(
-                        stringResource(R.string.ultrafix_other_params_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    // The prompts are only a reminder of what will run; show a
-                    // truncated preview instead of the full text. With the
-                    // toggle on, UltraFix runs on the quality tags, so preview
-                    // those instead of the prompt-page text.
-                    fun preview(text: String) = if (text.length > 80) text.take(80) + "..." else text
-                    val ultrafixPreviewPrompt =
-                        if (ultrafixQualityDenoise) {
-                            GenerationDefaults.ULTRAFIX_QUALITY_PROMPT
-                        } else {
-                            promptField.text
-                        }
-                    if (ultrafixPreviewPrompt.isNotBlank()) {
-                        Text(
-                            stringResource(R.string.image_prompt),
-                            style = MaterialTheme.typography.titleSmall,
-                        )
-                        Text(
-                            preview(ultrafixPreviewPrompt),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    if (negativePromptField.text.isNotBlank()) {
-                        Text(
-                            stringResource(R.string.negative_prompt),
-                            style = MaterialTheme.typography.titleSmall,
-                        )
-                        Text(
-                            preview(negativePromptField.text),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    showUltrafixConfirmDialog = false
-                    startUltrafix()
-                }) {
-                    Text(stringResource(R.string.confirm))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showUltrafixConfirmDialog = false }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-        )
-    }
+    // UltraFix dialog region (import, parameter confirmation, preparing
+    // overlay). Reads its state holders inside its own recompose scope so
+    // dialog-flag flips don't recompose the orchestrator; the heavy lifting
+    // (import application, the run itself, parameter persistence) stays here
+    // and is passed in as callbacks.
+    RunUltrafixDialogs(
+        ultrafixState = ultrafixState,
+        resultState = resultState,
+        setupState = setupState,
+        promptField = promptField,
+        negativePromptField = negativePromptField,
+        saveUltrafixParams = { saveUltrafixParams() },
+        startUltrafix = { startUltrafix() },
+        applyUltrafixImport = { applyUltrafixImport(it) },
+    )
 
     // Upscaler dialog
     if (showUpscalerDialog) {
@@ -3027,15 +2838,6 @@ fun ModelRunScreen(
         )
     }
 
-    BlockingProgressOverlay(visible = isUltrafixPreparing) {
-        ContainedLoadingIndicator()
-        Text(
-            text = stringResource(R.string.ultrafix_preparing),
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-    }
-
     if (historyState.showHistoryFilterSheet) {
         HistoryFilterSheet(
             initialFilter = historyState.historyFilter,
@@ -3066,7 +2868,7 @@ fun ModelRunScreen(
         // click path loads the item into the result-page state (exactly like
         // tapping a thumbnail) and reuses the regular upscale/ultrafix flows.
         val detailItem = historyState.selectedHistoryItem
-        val detailIdle = !runState.isRunning && !isUpscaling && !isUltrafixPreparing
+        val detailIdle = !runState.isRunning && !isUpscaling && !ultrafixState.isUltrafixPreparing
         val detailCanUpscale = historyBitmap != null && detailItem != null &&
             detailIdle && model?.runOnCpu == false &&
             (!isRemote || remoteRepository.upscalerPaths.isNotEmpty()) &&
@@ -3136,7 +2938,7 @@ fun ModelRunScreen(
                         contentDescription = "ultrafix image",
                         onClick = {
                             if (loadDetailIntoResult()) {
-                                showUltrafixConfirmDialog = true
+                                ultrafixState.showUltrafixConfirmDialog = true
                             }
                         },
                     )
@@ -3237,12 +3039,12 @@ fun ModelRunScreen(
                 val isUltrafixParams = params.mode == GenerationMode.ULTRAFIX
                 if (ParamShareField.STEPS in selectedFields) {
                     if (isUltrafixParams) {
-                        ultrafixSteps = params.steps.toFloat()
+                        ultrafixState.ultrafixSteps = params.steps.toFloat()
                         val maxDenoiseSteps = minOf(
                             GenerationDefaults.ULTRAFIX_DENOISE_STEPS_MAX,
-                            ultrafixSteps.roundToInt(),
+                            ultrafixState.ultrafixSteps.roundToInt(),
                         )
-                        ultrafixDenoiseSteps = ultrafixDenoiseSteps.coerceIn(0, maxDenoiseSteps)
+                        ultrafixState.ultrafixDenoiseSteps = ultrafixState.ultrafixDenoiseSteps.coerceIn(0, maxDenoiseSteps)
                     } else {
                         runState.steps = params.steps.toFloat()
                     }
@@ -3264,7 +3066,7 @@ fun ModelRunScreen(
                             GenerationDefaults.ULTRAFIX_DENOISE_STEPS_MAX,
                             total,
                         )
-                        ultrafixDenoiseSteps =
+                        ultrafixState.ultrafixDenoiseSteps =
                             (params.denoiseStrength * total + 0.5f).roundToInt()
                                 .coerceIn(0, maxDenoiseSteps)
                     } else {
