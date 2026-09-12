@@ -2146,7 +2146,7 @@ fun ModelRunScreen(
                                     stringResource(
                                         R.string.generating,
                                     )
-                                } ($runState.currentBatchIndex/$runState.batchCounts)…"
+                                } (${runState.currentBatchIndex}/${runState.batchCounts})…"
                             } else {
                                 stringResource(
                                     R.string.generating,
