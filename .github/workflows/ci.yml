@@ -36,14 +36,21 @@ jobs:
       # (app/src/main/cpp/build.sh / build.bat) and CI adds little to what
       # both platforms already validate locally. Kotlin compile + lint + a
       # real APK assembly run on every push.
-      - name: Lint, compile, assemble
+      # Master pushes get their APKs from the test-release job (both flavors,
+      # native engine included) — assembling here would duplicate that work
+      # on a second runner. PRs have no release job, so assemble to validate
+      # packaging.
+      - name: Lint and compile
         run: >
           ./gradlew
           :app:ktlintBasicDebugSourceSetCheck
           :app:ktlintFilterDebugSourceSetCheck
           :app:detekt
-          assembleBasicDebug
           --stacktrace
+
+      - name: Assemble APK (PR validation only)
+        if: github.event_name == 'pull_request'
+        run: ./gradlew assembleBasicDebug --stacktrace
 
   # Publishes installable builds to GitHub releases — one release per master
   # push (tag debug-<sha>, changelog from the commit history), so testers can
