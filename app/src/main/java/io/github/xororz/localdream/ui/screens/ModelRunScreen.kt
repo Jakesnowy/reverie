@@ -86,13 +86,10 @@ import io.github.xororz.localdream.service.BackgroundGenerationService
 import io.github.xororz.localdream.service.BackgroundGenerationService.GenerationState
 import io.github.xororz.localdream.ui.components.BlockingProgressOverlay
 import io.github.xororz.localdream.ui.components.GenerationParamsDialog
-import io.github.xororz.localdream.ui.components.ImportParametersDialog
 import io.github.xororz.localdream.ui.components.OverlayIconButton
-import io.github.xororz.localdream.ui.components.ShareParamsFlow
 import io.github.xororz.localdream.ui.components.ZoomableImageOverlay
 import io.github.xororz.localdream.utils.LogCapture
 import io.github.xororz.localdream.utils.ParamShare
-import io.github.xororz.localdream.utils.ParamShareField
 import io.github.xororz.localdream.utils.performUpscale
 import io.github.xororz.localdream.utils.reportImage
 import io.github.xororz.localdream.utils.saveImage
@@ -138,7 +135,6 @@ fun ModelRunScreen(
     val msgMediaPermissionHint = stringResource(R.string.media_permission_hint)
     val msgBackendFailed = stringResource(R.string.backend_failed)
     val msgImageSaved = stringResource(R.string.image_saved)
-    val msgImportApplied = stringResource(R.string.import_applied)
     val msgUpscaleFailed = stringResource(R.string.upscale_failed)
     val msgUltrafixFailed = stringResource(R.string.ultrafix_failed)
     val msgUnknownError = stringResource(R.string.unknown_error)
@@ -182,8 +178,6 @@ fun ModelRunScreen(
 
     // Parameter share state (see RunShareImportState).
     val shareState = remember { RunShareImportState() }
-    val shareUseBase64 by remember { generationPreferences.observeShareUseBase64() }
-        .collectAsState(initial = true)
 
     // History / filter / selection / batch state (see RunHistoryState).
     val historyState = remember { RunHistoryState(modelId) }
@@ -206,9 +200,6 @@ fun ModelRunScreen(
         .collectAsState(initial = emptyList())
     val knownSizes by remember { historyManager.observeKnownSizes() }
         .collectAsState(initial = emptyList())
-    val shareClearClipboardOnImport by remember {
-        generationPreferences.observeShareClearClipboardOnImport()
-    }.collectAsState(initial = true)
 
 
 
@@ -2175,87 +2166,17 @@ fun ModelRunScreen(
         }
     }
 
-    // Share parameters dialog
-    shareState.shareSourceParams?.let { source ->
-        ShareParamsFlow(
-            source = source,
-            modelId = shareState.shareSourceModelId,
-            useBase64Initial = shareUseBase64,
-            onUseBase64Changed = { value ->
-                scope.launch { generationPreferences.setShareUseBase64(value) }
-            },
-            onCopied = { shareState.clipboardImportChecked = true },
-            onDismiss = {
-                shareState.shareSourceParams = null
-                shareState.shareSourceModelId = null
-            },
-        )
-    }
-
-    // Import shared parameters dialog
-    shareState.pendingImport?.let { imported ->
-        val clearClipboardAction = {
-            val clipboard =
-                context.getSystemService(Context.CLIPBOARD_SERVICE)
-                    as? ClipboardManager
-            runCatching {
-                // Build.VERSION_CODES.P is API 28, minSdk = 28, so the legacy
-                // setPrimaryClip(empty) fallback is unreachable.
-                clipboard?.clearPrimaryClip()
-            }
-        }
-        ImportParametersDialog(
-            imported = imported,
-            clearClipboardInitial = shareClearClipboardOnImport,
-            onClearClipboardChanged = { value ->
-                scope.launch {
-                    generationPreferences.setShareClearClipboardOnImport(value)
-                }
-            },
-            onApply = { selectedFields, clearClipboard ->
-                if (ParamShareField.PROMPT in selectedFields) {
-                    imported.prompt?.let { promptField.replaceText(it) }
-                }
-                if (ParamShareField.NEGATIVE_PROMPT in selectedFields) {
-                    imported.negativePrompt?.let { negativePromptField.replaceText(it) }
-                }
-                if (ParamShareField.STEPS in selectedFields) {
-                    imported.steps?.let {
-                        runState.steps = it.toFloat().coerceIn(GenerationDefaults.STEPS_RANGE)
-                    }
-                }
-                if (ParamShareField.CFG in selectedFields) {
-                    imported.cfg?.let { runState.cfg = it.coerceIn(GenerationDefaults.CFG_RANGE) }
-                }
-                if (ParamShareField.SEED in selectedFields) {
-                    runState.seed = imported.seed?.toString() ?: ""
-                }
-                if (ParamShareField.SCHEDULER in selectedFields) {
-                    imported.scheduler?.let { runState.scheduler = it }
-                }
-                if (ParamShareField.DENOISE_STRENGTH in selectedFields) {
-                    imported.denoiseStrength?.let {
-                        runState.denoiseStrength = it.coerceIn(GenerationDefaults.DENOISE_RANGE)
-                    }
-                }
-                saveAllFields()
-                if (clearClipboard) {
-                    clearClipboardAction()
-                }
-                shareState.pendingImport = null
-                Toast.makeText(
-                    context,
-                    msgImportApplied,
-                    Toast.LENGTH_SHORT,
-                ).show()
-            },
-            onDismiss = { clearClipboard ->
-                if (clearClipboard) {
-                    clearClipboardAction()
-                }
-                shareState.pendingImport = null
-            },
-        )
-    }
+    // Share/import dialog region. Collects the share preferences inside its
+    // own scope so preference flips and dialog flags never recompose the
+    // orchestrator; the clipboard-detection effect stays above.
+    RunShareImportDialogs(
+        shareState = shareState,
+        runState = runState,
+        promptField = promptField,
+        negativePromptField = negativePromptField,
+        generationPreferences = generationPreferences,
+        scope = scope,
+        onSaveAllFields = { saveAllFields() },
+    )
 }
 
