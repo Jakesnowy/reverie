@@ -266,41 +266,19 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
     val msgRenameFailed = stringResource(R.string.rename_failed)
     val msgRemoteOffline = stringResource(R.string.remote_banner_offline)
 
-    var downloadingModel by remember { mutableStateOf<Model?>(null) }
-    var currentProgress by remember { mutableStateOf<DownloadProgress?>(null) }
-    var downloadError by remember { mutableStateOf<String?>(null) }
-    var showDownloadConfirm by remember { mutableStateOf<Model?>(null) }
-    var showDeleteConfirm by remember { mutableStateOf(false) }
-    var showUpgradeConfirm by remember { mutableStateOf<Model?>(null) }
-
-    var isSelectionMode by remember { mutableStateOf(false) }
-    var selectedModels by remember { mutableStateOf(setOf<Model>()) }
-
-    // Ordered pinned ids; drives the pinned-first sort within each tab. Loaded
-    // once and kept in sync as the user pins/unpins/renames.
-    var pinnedIds by remember { mutableStateOf(PinnedModels.get(context)) }
-    var renameTarget by remember { mutableStateOf<Model?>(null) }
+    // Download state (see ModelListDownloadState).
+    val downloadState = remember { ModelListDownloadState() }
+    // List-selection state (see ModelListSelectionState).
+    val selectionState = remember { ModelListSelectionState(PinnedModels.get(context)) }
+    // Dialog flags + conversion progress (see ModelListDialogsState).
+    val dialogsState = remember { ModelListDialogsState() }
+    // Custom-model source state (see ModelListSourceState).
+    val sourceState = remember { ModelListSourceState() }
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scrollBehavior =
         TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
-
-    var showSettingsDialog by remember { mutableStateOf(false) }
-    var showFileManagerDialog by remember { mutableStateOf(false) }
-    var showBackupDialog by remember { mutableStateOf(false) }
-    var showCleanTempDialog by remember { mutableStateOf(false) }
-    var tempScanBytes by remember { mutableLongStateOf(0L) }
-    var showEmbeddingManagerDialog by remember { mutableStateOf(false) }
-    var showCustomModelDialog by remember { mutableStateOf(false) }
-    var showCustomNpuModelDialog by remember { mutableStateOf(false) }
-    var isConverting by remember { mutableStateOf(false) }
-    var conversionProgress by remember { mutableStateOf("") }
-    var extractByteProgress by remember { mutableStateOf<ExtractByteProgress?>(null) }
-    var tempBaseUrl by remember { mutableStateOf("") }
-    var selectedSource by remember { mutableStateOf("huggingface") }
     val generationPreferences = remember { GenerationPreferences(context) }
-    var currentBaseUrl by remember { mutableStateOf("https://huggingface.co/") }
-
     val modelRepository = remember { ModelRepository.getInstance(context) }
     val upscalerRepository = remember { UpscalerRepository.getInstance(context) }
     val remoteRepository = remember { RemoteRepository.getInstance(context) }
@@ -308,8 +286,6 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
     // models; all local management actions (download/import/delete/rename)
     // are hidden because they would act on this device's storage.
     val remoteActive = remoteRepository.isActive
-
-    var showHelpDialog by remember { mutableStateOf(false) }
 
     val isFirstLaunch = remember {
         context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
@@ -325,8 +301,8 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                 is ModelDownloadService.DownloadState.Downloading -> {
                     val model = modelRepository.models.find { it.id == state.modelId }
                     if (model != null) {
-                        downloadingModel = model
-                        currentProgress = DownloadProgress(
+                        downloadState.downloadingModel = model
+                        downloadState.currentProgress = DownloadProgress(
                             progress = state.progress,
                             downloadedBytes = state.downloadedBytes,
                             totalBytes = state.totalBytes,
@@ -337,30 +313,30 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                 is ModelDownloadService.DownloadState.Extracting -> {
                     val model = modelRepository.models.find { it.id == state.modelId }
                     if (model != null) {
-                        downloadingModel = model
-                        currentProgress = null
+                        downloadState.downloadingModel = model
+                        downloadState.currentProgress = null
                     }
                 }
 
                 is ModelDownloadService.DownloadState.Success -> {
                     modelRepository.refreshModelState(state.modelId)
-                    downloadingModel = null
-                    currentProgress = null
+                    downloadState.downloadingModel = null
+                    downloadState.currentProgress = null
                     // Fire-and-forget so the snackbar's display time does not
                     // block this collector from seeing further states.
                     scope.launch { snackbarHostState.showSnackbar(msgDownloadDone) }
                 }
 
                 is ModelDownloadService.DownloadState.Error -> {
-                    downloadingModel = null
-                    currentProgress = null
-                    downloadError = state.message
+                    downloadState.downloadingModel = null
+                    downloadState.currentProgress = null
+                    downloadState.downloadError = state.message
                 }
 
                 is ModelDownloadService.DownloadState.Idle -> {
-                    if (downloadingModel != null) {
-                        downloadingModel = null
-                        currentProgress = null
+                    if (downloadState.downloadingModel != null) {
+                        downloadState.downloadingModel = null
+                        downloadState.currentProgress = null
                     }
                 }
             }
@@ -369,15 +345,15 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
 
     LaunchedEffect(Unit) {
         if (isFirstLaunch) {
-            showHelpDialog = true
+            dialogsState.showHelpDialog = true
             // Written here instead of inside remember: composition may be
             // discarded, effects only run once it is committed.
             context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
                 .edit { putBoolean("is_first_launch", false) }
         }
         scope.launch {
-            currentBaseUrl = generationPreferences.getBaseUrl()
-            selectedSource = generationPreferences.getSelectedSource()
+            sourceState.currentBaseUrl = generationPreferences.getBaseUrl()
+            sourceState.selectedSource = generationPreferences.getSelectedSource()
         }
         modelRepository.ensureLoaded()
         // Re-establish a saved device link and pull a fresh catalog; on
@@ -389,11 +365,11 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
     }
 
     val listedModels = if (remoteActive) remoteRepository.models else modelRepository.models
-    val cpuModels = remember(listedModels, pinnedIds) {
-        PinnedModels.sort(listedModels.filter { it.runOnCpu }, pinnedIds)
+    val cpuModels = remember(listedModels, selectionState.pinnedIds) {
+        PinnedModels.sort(listedModels.filter { it.runOnCpu }, selectionState.pinnedIds)
     }
-    val npuModels = remember(listedModels, pinnedIds) {
-        PinnedModels.sort(listedModels.filter { !it.runOnCpu }, pinnedIds)
+    val npuModels = remember(listedModels, selectionState.pinnedIds) {
+        PinnedModels.sort(listedModels.filter { !it.runOnCpu }, selectionState.pinnedIds)
     }
 
     val lastViewedPage = remember {
@@ -416,24 +392,24 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
         stringResource(R.string.npu_models),
     )
 
-    if (isSelectionMode) {
+    if (selectionState.isSelectionMode) {
         BackHandler {
-            isSelectionMode = false
-            selectedModels = emptySet()
+            selectionState.isSelectionMode = false
+            selectionState.selectedModels = emptySet()
         }
     }
-    LaunchedEffect(downloadError) {
-        downloadError?.let {
+    LaunchedEffect(downloadState.downloadError) {
+        downloadState.downloadError?.let {
             scope.launch {
                 snackbarHostState.showSnackbar(
                     message = it,
                     duration = SnackbarDuration.Short,
                 )
-                downloadError = null
+                downloadState.downloadError = null
             }
         }
     }
-    if (showHelpDialog) {
+    if (dialogsState.showHelpDialog) {
         AlertDialog(
             onDismissRequest = { },
             title = { Text(stringResource(R.string.about_app)) },
@@ -477,37 +453,37 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showHelpDialog = false }) {
+                TextButton(onClick = { dialogsState.showHelpDialog = false }) {
                     Text(stringResource(R.string.got_it))
                 }
             },
         )
     }
 
-    LaunchedEffect(showSettingsDialog) {
-        if (showSettingsDialog) {
-            tempBaseUrl = currentBaseUrl
+    LaunchedEffect(dialogsState.showSettingsDialog) {
+        if (dialogsState.showSettingsDialog) {
+            sourceState.tempBaseUrl = sourceState.currentBaseUrl
         }
     }
 
-    if (showBackupDialog) {
+    if (dialogsState.showBackupDialog) {
         DataBackupDialog(
             installedModelIds = modelRepository.models
                 .filter { it.isDownloaded }
                 .map { it.id }
                 .toSet(),
-            onDismiss = { showBackupDialog = false },
+            onDismiss = { dialogsState.showBackupDialog = false },
         )
     }
 
-    if (showCleanTempDialog) {
+    if (dialogsState.showCleanTempDialog) {
         AlertDialog(
-            onDismissRequest = { showCleanTempDialog = false },
+            onDismissRequest = { dialogsState.showCleanTempDialog = false },
             title = { Text(stringResource(R.string.clean_temp_files)) },
-            text = { Text(stringResource(R.string.clean_temp_confirm, formatBytes(tempScanBytes))) },
+            text = { Text(stringResource(R.string.clean_temp_confirm, formatBytes(dialogsState.tempScanBytes))) },
             confirmButton = {
                 TextButton(onClick = {
-                    showCleanTempDialog = false
+                    dialogsState.showCleanTempDialog = false
                     scope.launch {
                         val freed = TempCleaner.clean(context)
                         Toast.makeText(
@@ -519,17 +495,17 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                 }) { Text(stringResource(R.string.confirm)) }
             },
             dismissButton = {
-                TextButton(onClick = { showCleanTempDialog = false }) {
+                TextButton(onClick = { dialogsState.showCleanTempDialog = false }) {
                     Text(stringResource(R.string.cancel))
                 }
             },
         )
     }
 
-    if (showFileManagerDialog) {
+    if (dialogsState.showFileManagerDialog) {
         FileManagerDialog(
             context = context,
-            onDismiss = { showFileManagerDialog = false },
+            onDismiss = { dialogsState.showFileManagerDialog = false },
             onFileDeleted = {
                 scope.launch {
                     modelRepository.refreshAllModels()
@@ -539,10 +515,10 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
         )
     }
 
-    if (showEmbeddingManagerDialog) {
+    if (dialogsState.showEmbeddingManagerDialog) {
         EmbeddingManagerDialog(
             context = context,
-            onDismiss = { showEmbeddingManagerDialog = false },
+            onDismiss = { dialogsState.showEmbeddingManagerDialog = false },
             onEmbeddingDeleted = {
                 scope.launch {
                     snackbarHostState.showSnackbar(msgEmbeddingDeleted)
@@ -650,12 +626,12 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
         )
     }
 
-    if (showCustomModelDialog) {
+    if (dialogsState.showCustomModelDialog) {
         CustomModelDialog(
             context,
-            onDismiss = { showCustomModelDialog = false },
+            onDismiss = { dialogsState.showCustomModelDialog = false },
             onModelAdded = { modelName, fileUri, clipSkip, loraFiles ->
-                showCustomModelDialog = false
+                dialogsState.showCustomModelDialog = false
                 scope.launch {
                     convertCustomModel(
                         context = context,
@@ -664,20 +640,20 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                         clipSkip = clipSkip,
                         loraFiles = loraFiles,
                         onProgress = { progress ->
-                            conversionProgress = progress
+                            dialogsState.conversionProgress = progress
                         },
                         onStart = {
-                            isConverting = true
+                            dialogsState.isConverting = true
                         },
                         onSuccess = {
-                            isConverting = false
+                            dialogsState.isConverting = false
                             scope.launch {
                                 modelRepository.refreshAllModels()
                                 snackbarHostState.showSnackbar(msgModelConversionSuccess)
                             }
                         },
                         onError = { error ->
-                            isConverting = false
+                            dialogsState.isConverting = false
                             scope.launch {
                                 snackbarHostState.showSnackbar(
                                     msgModelConversionFailed.format(error),
@@ -690,38 +666,38 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
         )
     }
 
-    if (showCustomNpuModelDialog) {
+    if (dialogsState.showCustomNpuModelDialog) {
         CustomNpuModelDialog(
             context,
-            onDismiss = { showCustomNpuModelDialog = false },
+            onDismiss = { dialogsState.showCustomNpuModelDialog = false },
             onModelAdded = { modelName, zipUri ->
-                showCustomNpuModelDialog = false
+                dialogsState.showCustomNpuModelDialog = false
                 scope.launch {
                     extractNpuModel(
                         context = context,
                         modelName = modelName,
                         zipUri = zipUri,
                         onProgress = { progress ->
-                            conversionProgress = progress
+                            dialogsState.conversionProgress = progress
                         },
                         onByteProgress = { extracted, total, fraction ->
-                            extractByteProgress = ExtractByteProgress(extracted, total, fraction)
+                            dialogsState.extractByteProgress = ExtractByteProgress(extracted, total, fraction)
                         },
                         onStart = {
-                            extractByteProgress = null
-                            isConverting = true
+                            dialogsState.extractByteProgress = null
+                            dialogsState.isConverting = true
                         },
                         onSuccess = {
-                            isConverting = false
-                            extractByteProgress = null
+                            dialogsState.isConverting = false
+                            dialogsState.extractByteProgress = null
                             scope.launch {
                                 modelRepository.refreshAllModels()
                                 snackbarHostState.showSnackbar(msgNpuModelAddedSuccess)
                             }
                         },
                         onError = { error ->
-                            isConverting = false
-                            extractByteProgress = null
+                            dialogsState.isConverting = false
+                            dialogsState.extractByteProgress = null
                             scope.launch {
                                 snackbarHostState.showSnackbar(
                                     msgNpuModelAddFailed.format(error),
@@ -734,16 +710,16 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
         )
     }
 
-    if (showDeleteConfirm && selectedModels.isNotEmpty()) {
+    if (selectionState.showDeleteConfirm && selectionState.selectedModels.isNotEmpty()) {
         DeleteConfirmDialog(
-            selectedCount = selectedModels.size,
+            selectedCount = selectionState.selectedModels.size,
             onConfirm = { keepHistory ->
-                showDeleteConfirm = false
-                isSelectionMode = false
+                selectionState.showDeleteConfirm = false
+                selectionState.isSelectionMode = false
 
                 scope.launch {
                     var successCount = 0
-                    selectedModels.forEach { model ->
+                    selectionState.selectedModels.forEach { model ->
                         if (model.deleteModel(context, keepHistory)) {
                             successCount++
                         }
@@ -752,60 +728,60 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                     modelRepository.refreshAllModels()
 
                     snackbarHostState.showSnackbar(
-                        if (successCount == selectedModels.size) {
+                        if (successCount == selectionState.selectedModels.size) {
                             msgDeleteSuccess
                         } else {
                             msgDeleteFailed
                         },
                     )
 
-                    selectedModels = emptySet()
+                    selectionState.selectedModels = emptySet()
                 }
             },
             onDismiss = {
-                showDeleteConfirm = false
+                selectionState.showDeleteConfirm = false
             },
         )
     }
 
-    renameTarget?.let { model ->
+    selectionState.renameTarget?.let { model ->
         RenameModelDialog(
             currentName = model.name,
             existingIds = modelRepository.models.map { it.id }.toSet() - model.id,
             onConfirm = { newName ->
-                renameTarget = null
-                isSelectionMode = false
-                selectedModels = emptySet()
+                selectionState.renameTarget = null
+                selectionState.isSelectionMode = false
+                selectionState.selectedModels = emptySet()
                 scope.launch {
                     val result = model.rename(context, newName)
                     if (result is RenameResult.Success) {
                         modelRepository.refreshAllModels()
-                        pinnedIds = PinnedModels.get(context)
+                        selectionState.pinnedIds = PinnedModels.get(context)
                         snackbarHostState.showSnackbar(msgRenameSuccess)
                     } else {
                         snackbarHostState.showSnackbar(msgRenameFailed)
                     }
                 }
             },
-            onDismiss = { renameTarget = null },
+            onDismiss = { selectionState.renameTarget = null },
         )
     }
 
-    showDownloadConfirm?.let { model ->
-        if (downloadingModel != null) {
+    downloadState.showDownloadConfirm?.let { model ->
+        if (downloadState.downloadingModel != null) {
             AlertDialog(
-                onDismissRequest = { showDownloadConfirm = null },
+                onDismissRequest = { downloadState.showDownloadConfirm = null },
                 title = { Text(stringResource(R.string.cannot_download)) },
                 text = { Text(stringResource(R.string.cannot_download_hint)) },
                 confirmButton = {
-                    TextButton(onClick = { showDownloadConfirm = null }) {
+                    TextButton(onClick = { downloadState.showDownloadConfirm = null }) {
                         Text(stringResource(R.string.confirm))
                     }
                 },
             )
         } else {
             AlertDialog(
-                onDismissRequest = { showDownloadConfirm = null },
+                onDismissRequest = { downloadState.showDownloadConfirm = null },
                 title = { Text(stringResource(R.string.download_model)) },
                 text = {
                     Text(stringResource(R.string.download_model_hint, model.name))
@@ -813,9 +789,9 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                 confirmButton = {
                     TextButton(
                         onClick = {
-                            showDownloadConfirm = null
-                            downloadingModel = model
-                            currentProgress = null
+                            downloadState.showDownloadConfirm = null
+                            downloadState.downloadingModel = model
+                            downloadState.currentProgress = null
                             model.startDownload(context)
                         },
                     ) {
@@ -823,7 +799,7 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showDownloadConfirm = null }) {
+                    TextButton(onClick = { downloadState.showDownloadConfirm = null }) {
                         Text(stringResource(R.string.cancel))
                     }
                 },
@@ -831,9 +807,9 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
         }
     }
 
-    showUpgradeConfirm?.let { model ->
+    downloadState.showUpgradeConfirm?.let { model ->
         AlertDialog(
-            onDismissRequest = { showUpgradeConfirm = null },
+            onDismissRequest = { downloadState.showUpgradeConfirm = null },
             title = { Text(stringResource(R.string.upgrade_model)) },
             text = {
                 Text(stringResource(R.string.upgrade_model_hint, model.name))
@@ -841,9 +817,9 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
             confirmButton = {
                 TextButton(
                     onClick = {
-                        showUpgradeConfirm = null
-                        downloadingModel = model
-                        currentProgress = null
+                        downloadState.showUpgradeConfirm = null
+                        downloadState.downloadingModel = model
+                        downloadState.currentProgress = null
                         model.startDownload(context)
                     },
                 ) {
@@ -851,7 +827,7 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showUpgradeConfirm = null }) {
+                TextButton(onClick = { downloadState.showUpgradeConfirm = null }) {
                     Text(stringResource(R.string.cancel))
                 }
             },
@@ -869,11 +845,11 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
-                            text = if (isSelectionMode) {
+                            text = if (selectionState.isSelectionMode) {
                                 pluralStringResource(
                                     R.plurals.selected_items,
-                                    selectedModels.size,
-                                    selectedModels.size,
+                                    selectionState.selectedModels.size,
+                                    selectionState.selectedModels.size,
                                 )
                             } else {
                                 stringResource(R.string.available_models)
@@ -886,30 +862,30 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                     }
                 },
                 navigationIcon = {
-                    if (isSelectionMode) {
+                    if (selectionState.isSelectionMode) {
                         IconButton(onClick = {
-                            isSelectionMode = false
-                            selectedModels = emptySet()
+                            selectionState.isSelectionMode = false
+                            selectionState.selectedModels = emptySet()
                         }) {
                             Icon(Icons.Default.Close, stringResource(R.string.cancel))
                         }
                     }
                 },
                 actions = {
-                    if (isSelectionMode) {
-                        if (selectedModels.isNotEmpty()) {
+                    if (selectionState.isSelectionMode) {
+                        if (selectionState.selectedModels.isNotEmpty()) {
                             // Left to right: pin, rename (single custom only), delete.
-                            val allPinned = selectedModels.all { it.id in pinnedIds }
+                            val allPinned = selectionState.selectedModels.all { it.id in selectionState.pinnedIds }
                             IconButton(onClick = {
-                                val ids = selectedModels.map { it.id }
+                                val ids = selectionState.selectedModels.map { it.id }
                                 if (allPinned) {
                                     PinnedModels.unpin(context, ids)
                                 } else {
                                     PinnedModels.pin(context, ids)
                                 }
-                                pinnedIds = PinnedModels.get(context)
-                                isSelectionMode = false
-                                selectedModels = emptySet()
+                                selectionState.pinnedIds = PinnedModels.get(context)
+                                selectionState.isSelectionMode = false
+                                selectionState.selectedModels = emptySet()
                             }) {
                                 Icon(
                                     imageVector = if (allPinned) {
@@ -927,14 +903,14 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                                 )
                             }
 
-                            val singleSelected = selectedModels.singleOrNull()
+                            val singleSelected = selectionState.selectedModels.singleOrNull()
                             if (singleSelected != null && singleSelected.isCustom) {
-                                IconButton(onClick = { renameTarget = singleSelected }) {
+                                IconButton(onClick = { selectionState.renameTarget = singleSelected }) {
                                     Icon(Icons.Default.Edit, stringResource(R.string.rename))
                                 }
                             }
 
-                            IconButton(onClick = { showDeleteConfirm = true }) {
+                            IconButton(onClick = { selectionState.showDeleteConfirm = true }) {
                                 Icon(Icons.Default.Delete, stringResource(R.string.delete))
                             }
                         }
@@ -960,7 +936,7 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                                 },
                                 onClick = {
                                     menuExpanded = false
-                                    showHelpDialog = true
+                                    dialogsState.showHelpDialog = true
                                 },
                             )
                             DropdownMenuItem(
@@ -1011,7 +987,7 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                                 },
                                 onClick = {
                                     menuExpanded = false
-                                    showSettingsDialog = true
+                                    dialogsState.showSettingsDialog = true
                                 },
                             )
                         }
@@ -1074,7 +1050,7 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                     if (page == 0 && !remoteActive) {
                         item {
                             AddCustomModelButton(
-                                onClick = { showCustomModelDialog = true },
+                                onClick = { dialogsState.showCustomModelDialog = true },
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
@@ -1083,7 +1059,7 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                     if (page == 1 && !remoteActive) {
                         item {
                             AddCustomNpuModelButton(
-                                onClick = { showCustomNpuModelDialog = true },
+                                onClick = { dialogsState.showCustomNpuModelDialog = true },
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
@@ -1100,9 +1076,9 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                                 fadeOutSpec = tween(Motion.DurationMedium),
                                 placementSpec = Motion.springExpressiveSpatial(),
                             ),
-                            isSelected = selectedModels.contains(model),
-                            isSelectionMode = isSelectionMode,
-                            isPinned = model.id in pinnedIds,
+                            isSelected = selectionState.selectedModels.contains(model),
+                            isSelectionMode = selectionState.isSelectionMode,
+                            isPinned = model.id in selectionState.pinnedIds,
                             onClick = {
                                 if (remoteActive) {
                                     // The model runs on the host device, so this
@@ -1125,21 +1101,21 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                                     }
                                     return@ModelCard
                                 }
-                                if (isSelectionMode) {
+                                if (selectionState.isSelectionMode) {
                                     if (model.isDownloaded) {
-                                        selectedModels = if (selectedModels.contains(model)) {
-                                            selectedModels - model
+                                        selectionState.selectedModels = if (selectionState.selectedModels.contains(model)) {
+                                            selectionState.selectedModels - model
                                         } else {
-                                            selectedModels + model
+                                            selectionState.selectedModels + model
                                         }
 
-                                        if (selectedModels.isEmpty()) {
-                                            isSelectionMode = false
+                                        if (selectionState.selectedModels.isEmpty()) {
+                                            selectionState.isSelectionMode = false
                                         }
                                     }
                                 } else {
                                     if (!model.isDownloaded) {
-                                        showDownloadConfirm = model
+                                        downloadState.showDownloadConfirm = model
                                     } else {
                                         navController.navigate(Screen.ModelRun.createRoute(model.id))
                                     }
@@ -1149,13 +1125,13 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                                 // Selection mode drives local file management
                                 // (pin/rename/delete); none of it applies to
                                 // the host's models.
-                                if (!remoteActive && model.isDownloaded && !isSelectionMode) {
-                                    isSelectionMode = true
-                                    selectedModels = setOf(model)
+                                if (!remoteActive && model.isDownloaded && !selectionState.isSelectionMode) {
+                                    selectionState.isSelectionMode = true
+                                    selectionState.selectedModels = setOf(model)
                                 }
                             },
                             onUpdateClick = {
-                                showUpgradeConfirm = model
+                                downloadState.showUpgradeConfirm = model
                             },
                         )
                     }
@@ -1216,20 +1192,20 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
     // drawerOffset: 0f = fully open, 1f = fully off-screen to the right.
     val drawerOffset = remember { Animatable(1f) }
     val drawerAnimSpec = tween<Float>(Motion.DurationLong, easing = Motion.Emphasized)
-    LaunchedEffect(showSettingsDialog) {
+    LaunchedEffect(dialogsState.showSettingsDialog) {
         drawerOffset.animateTo(
-            targetValue = if (showSettingsDialog) 0f else 1f,
+            targetValue = if (dialogsState.showSettingsDialog) 0f else 1f,
             animationSpec = drawerAnimSpec,
         )
     }
-    if (showSettingsDialog) {
+    if (dialogsState.showSettingsDialog) {
         PredictiveBackHandler { progressFlow ->
             try {
                 progressFlow.collect { event ->
                     drawerOffset.snapTo(event.progress)
                 }
                 // Committed: close the drawer; LaunchedEffect finishes the animation.
-                showSettingsDialog = false
+                dialogsState.showSettingsDialog = false
             } catch (_: CancellationException) {
                 // Cancelled: slide back to open.
                 drawerOffset.animateTo(0f, animationSpec = drawerAnimSpec)
@@ -1250,7 +1226,7 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                     TopAppBar(
                         title = { Text(stringResource(R.string.settings)) },
                         navigationIcon = {
-                            IconButton(onClick = { showSettingsDialog = false }) {
+                            IconButton(onClick = { dialogsState.showSettingsDialog = false }) {
                                 Icon(
                                     Icons.AutoMirrored.Filled.ArrowBack,
                                     stringResource(R.string.back),
@@ -1303,16 +1279,16 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                                 onExpandedChange = { expanded = !expanded },
                             ) {
                                 OutlinedTextField(
-                                    value = when (selectedSource) {
+                                    value = when (sourceState.selectedSource) {
                                         "huggingface" -> "https://huggingface.co/"
                                         "hf-mirror" -> "https://hf-mirror.com/"
-                                        else -> tempBaseUrl
+                                        else -> sourceState.tempBaseUrl
                                     },
                                     onValueChange = {
-                                        if (selectedSource == "custom") tempBaseUrl = it
+                                        if (sourceState.selectedSource == "custom") sourceState.tempBaseUrl = it
                                     },
                                     label = { Text(stringResource(R.string.download_from)) },
-                                    readOnly = selectedSource != "custom",
+                                    readOnly = sourceState.selectedSource != "custom",
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .menuAnchor(
@@ -1321,13 +1297,13 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                                         )
                                         .focusRequester(focusRequester)
                                         .onFocusChanged { focusState ->
-                                            if (!focusState.isFocused && selectedSource == "custom") {
+                                            if (!focusState.isFocused && sourceState.selectedSource == "custom") {
                                                 scope.launch {
-                                                    if (tempBaseUrl.isNotEmpty() && tempBaseUrl != currentBaseUrl) {
+                                                    if (sourceState.tempBaseUrl.isNotEmpty() && sourceState.tempBaseUrl != sourceState.currentBaseUrl) {
                                                         generationPreferences.saveBaseUrl(
-                                                            tempBaseUrl,
+                                                            sourceState.tempBaseUrl,
                                                         )
-                                                        currentBaseUrl = tempBaseUrl
+                                                        sourceState.currentBaseUrl = sourceState.tempBaseUrl
                                                         modelRepository.refreshAllModels()
                                                         upscalerRepository.refreshBaseUrl()
                                                     }
@@ -1344,8 +1320,8 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                                     singleLine = true,
                                 )
 
-                                LaunchedEffect(selectedSource) {
-                                    if (selectedSource == "custom") {
+                                LaunchedEffect(sourceState.selectedSource) {
+                                    if (sourceState.selectedSource == "custom") {
                                         focusRequester.requestFocus()
                                     }
                                 }
@@ -1356,15 +1332,15 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                                     DropdownMenuItem(
                                         text = { Text(stringResource(R.string.source_huggingface)) },
                                         onClick = {
-                                            selectedSource = "huggingface"
+                                            sourceState.selectedSource = "huggingface"
                                             val newUrl = "https://huggingface.co/"
-                                            tempBaseUrl = newUrl
+                                            sourceState.tempBaseUrl = newUrl
                                             expanded = false
                                             scope.launch {
                                                 generationPreferences.saveSelectedSource("huggingface")
                                                 generationPreferences.saveBaseUrl(newUrl)
-                                                if (currentBaseUrl != newUrl) {
-                                                    currentBaseUrl = newUrl
+                                                if (sourceState.currentBaseUrl != newUrl) {
+                                                    sourceState.currentBaseUrl = newUrl
                                                     modelRepository.refreshAllModels()
                                                     upscalerRepository.refreshBaseUrl()
                                                 }
@@ -1374,15 +1350,15 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                                     DropdownMenuItem(
                                         text = { Text(stringResource(R.string.source_hf_mirror)) },
                                         onClick = {
-                                            selectedSource = "hf-mirror"
+                                            sourceState.selectedSource = "hf-mirror"
                                             val newUrl = "https://hf-mirror.com/"
-                                            tempBaseUrl = newUrl
+                                            sourceState.tempBaseUrl = newUrl
                                             expanded = false
                                             scope.launch {
                                                 generationPreferences.saveSelectedSource("hf-mirror")
                                                 generationPreferences.saveBaseUrl(newUrl)
-                                                if (currentBaseUrl != newUrl) {
-                                                    currentBaseUrl = newUrl
+                                                if (sourceState.currentBaseUrl != newUrl) {
+                                                    sourceState.currentBaseUrl = newUrl
                                                     modelRepository.refreshAllModels()
                                                     upscalerRepository.refreshBaseUrl()
                                                 }
@@ -1392,8 +1368,8 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                                     DropdownMenuItem(
                                         text = { Text(stringResource(R.string.source_custom)) },
                                         onClick = {
-                                            selectedSource = "custom"
-                                            tempBaseUrl = "https://"
+                                            sourceState.selectedSource = "custom"
+                                            sourceState.tempBaseUrl = "https://"
                                             expanded = false
                                             scope.launch {
                                                 generationPreferences.saveSelectedSource("custom")
@@ -1402,7 +1378,7 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                                     )
                                 }
                             }
-                            if (selectedSource == "custom") {
+                            if (sourceState.selectedSource == "custom") {
                                 Text(
                                     stringResource(R.string.download_source_custom_warning),
                                     style = MaterialTheme.typography.bodySmall,
@@ -1841,7 +1817,7 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                         SettingNavCard(
                             icon = Icons.Default.Description,
                             label = stringResource(R.string.embedding_manager),
-                            onClick = { showEmbeddingManagerDialog = true },
+                            onClick = { dialogsState.showEmbeddingManagerDialog = true },
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
@@ -1851,7 +1827,7 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                         SettingNavCard(
                             icon = Icons.Default.FolderOpen,
                             label = stringResource(R.string.file_manager),
-                            onClick = { showFileManagerDialog = true },
+                            onClick = { dialogsState.showFileManagerDialog = true },
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
@@ -1861,7 +1837,7 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                         SettingNavCard(
                             icon = Icons.Default.SettingsBackupRestore,
                             label = stringResource(R.string.backup_restore),
-                            onClick = { showBackupDialog = true },
+                            onClick = { dialogsState.showBackupDialog = true },
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
@@ -1878,8 +1854,8 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                                         Toast.makeText(context, msgCleanTempNone, Toast.LENGTH_SHORT)
                                             .show()
                                     } else {
-                                        tempScanBytes = bytes
-                                        showCleanTempDialog = true
+                                        dialogsState.tempScanBytes = bytes
+                                        dialogsState.showCleanTempDialog = true
                                     }
                                 }
                             },
@@ -1891,8 +1867,8 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
         }
     }
 
-    BlockingProgressOverlay(visible = isConverting) {
-        val byteProgress = extractByteProgress
+    BlockingProgressOverlay(visible = dialogsState.isConverting) {
+        val byteProgress = dialogsState.extractByteProgress
         if (byteProgress != null) {
             SmoothCircularWavyProgressIndicator(
                 progress = byteProgress.fraction,
@@ -1908,8 +1884,8 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
         } else {
             ContainedLoadingIndicator()
             Text(
-                text = if (conversionProgress.isNotEmpty()) {
-                    conversionProgress
+                text = if (dialogsState.conversionProgress.isNotEmpty()) {
+                    dialogsState.conversionProgress
                 } else {
                     stringResource(R.string.converting)
                 },
@@ -1920,19 +1896,19 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
     }
 
     BlockingProgressOverlay(
-        visible = downloadingModel != null,
+        visible = downloadState.downloadingModel != null,
         minWidth = 320.dp,
         innerPadding = 24.dp,
         verticalSpacing = 24.dp,
     ) {
         Text(
-            text = stringResource(R.string.downloading_model, downloadingModel?.name ?: ""),
+            text = stringResource(R.string.downloading_model, downloadState.downloadingModel?.name ?: ""),
             style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.onSurface,
             textAlign = TextAlign.Center,
         )
 
-        currentProgress?.let { progress ->
+        downloadState.currentProgress?.let { progress ->
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
