@@ -182,7 +182,10 @@ fun DrawScreen(
     var isEraserMode by remember { mutableStateOf(false) }
     var isPickerMode by remember { mutableStateOf(false) }
     var isZoomMode by remember { mutableStateOf(false) }
-    var isTouchpadMode by remember { mutableStateOf(true) }
+    // Direct painting by default (brush follows the finger). The relative
+    // "touchpad" mode — where a cursor starts at the viewport center and is
+    // dragged by finger deltas — remains available as a toolbar toggle.
+    var isTouchpadMode by remember { mutableStateOf(false) }
 
     var cloneMode by remember { mutableStateOf(CloneMode.OFF) }
     var activeCloneShader by remember { mutableStateOf<BitmapShader?>(null) }
