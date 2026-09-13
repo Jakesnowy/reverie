@@ -34,7 +34,6 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -57,7 +56,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
@@ -65,7 +63,6 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ContainedLoadingIndicator
@@ -74,7 +71,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -101,7 +97,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.scale
@@ -2312,77 +2307,14 @@ fun ModelRunScreen(
         Scaffold(
             modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
             topBar = {
-                LargeTopAppBar(
-                    title = {
-                        // Hide title when collapsed
-                        if (scrollBehavior.state.collapsedFraction < 0.5f) {
-                            Column {
-                                Text(
-                                    text = model?.name ?: "Running Model",
-                                    fontWeight = FontWeight.Normal,
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                                )
-                                Text(
-                                    text = model?.description ?: "",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                                )
-                            }
-                        }
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = {
-                            if (runState.isRunning) {
-                                setupState.showInterruptDialog = true
-                            } else {
-                                handleExit()
-                            }
-                        }) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = stringResource(R.string.back),
-                            )
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        scrolledContainerColor = MaterialTheme.colorScheme.surface,
-                    ),
+                RunTopBar(
+                    runState = runState,
+                    setupState = setupState,
+                    model = model,
+                    pagerState = pagerState,
                     scrollBehavior = scrollBehavior,
-                    actions = {
-                        Row {
-                            val tabs = listOf(
-                                stringResource(R.string.prompt_tab),
-                                stringResource(R.string.result_tab),
-                                stringResource(R.string.history_tab),
-                            )
-                            tabs.forEachIndexed { index, label ->
-                                val selected = pagerState.currentPage == index
-                                TextButton(
-                                    onClick = {
-                                        coroutineScope.launch {
-                                            focusManager.clearFocus()
-                                            pagerState.animateScrollToPage(index)
-                                        }
-                                    },
-                                    colors = ButtonDefaults.textButtonColors(
-                                        contentColor = if (selected) {
-                                            MaterialTheme.colorScheme.primary
-                                        } else {
-                                            MaterialTheme.colorScheme.onSurfaceVariant
-                                        },
-                                    ),
-                                ) {
-                                    Text(label)
-                                }
-                            }
-                        }
-                    },
+                    coroutineScope = coroutineScope,
+                    onExit = { handleExit() },
                 )
             },
         ) { paddingValues ->
