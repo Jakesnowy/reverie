@@ -19,58 +19,27 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandHorizontally
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkHorizontally
-import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Brush
-import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ContainedLoadingIndicator
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
@@ -84,14 +53,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.scale
 import androidx.lifecycle.Lifecycle
@@ -99,8 +65,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.NavController
 import androidx.paging.compose.collectAsLazyPagingItems
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import io.github.xororz.localdream.BuildConfig
 import io.github.xororz.localdream.R
 import io.github.xororz.localdream.data.GenerationDefaults
@@ -125,7 +89,6 @@ import io.github.xororz.localdream.ui.components.GenerationParamsDialog
 import io.github.xororz.localdream.ui.components.ImportParametersDialog
 import io.github.xororz.localdream.ui.components.OverlayIconButton
 import io.github.xororz.localdream.ui.components.ShareParamsFlow
-import io.github.xororz.localdream.ui.components.SmoothLinearWavyProgressIndicator
 import io.github.xororz.localdream.ui.components.ZoomableImageOverlay
 import io.github.xororz.localdream.utils.LogCapture
 import io.github.xororz.localdream.utils.ParamShare
@@ -174,7 +137,6 @@ fun ModelRunScreen(
     // String resources hoisted to composable scope (lint: LocalContextGetResourceValueCall).
     val msgMediaPermissionHint = stringResource(R.string.media_permission_hint)
     val msgBackendFailed = stringResource(R.string.backend_failed)
-    val msgImportNoParams = stringResource(R.string.import_no_params)
     val msgImageSaved = stringResource(R.string.image_saved)
     val msgImportApplied = stringResource(R.string.import_applied)
     val msgUpscaleFailed = stringResource(R.string.upscale_failed)
@@ -182,7 +144,6 @@ fun ModelRunScreen(
     val msgUnknownError = stringResource(R.string.unknown_error)
     val msgSaveFailed = stringResource(R.string.save_failed_detail)
     val msgImg2imgFailed = stringResource(R.string.img2img_failed_detail)
-    val msgPleaseCropFirst = stringResource(R.string.please_crop_first)
     val msgReportSuccess = stringResource(R.string.report_success)
     val msgReportFailed = stringResource(R.string.report_failed)
     val msgNoImageAvailable = stringResource(R.string.no_image_available)
@@ -1502,652 +1463,155 @@ fun ModelRunScreen(
         }
     }
 
-    // === Page Composable Functions ===
-    @Composable
-    fun PromptPage() {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                // Reserve the IME area so the scroll viewport ends above the
-                // keyboard; the focused prompt field is then scrolled above the IME
-                // (which also keeps its window position accurate for the popup).
-                .imePadding()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            AnimatedVisibility(
-                visible = resultState.intermediateBitmap == null,
-                enter = fadeIn() + expandVertically(expandFrom = Alignment.Top),
-                exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Top),
-            ) {
-                ElevatedCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.large,
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                stringResource(R.string.prompt_settings),
-                                style = MaterialTheme.typography.titleMedium,
-                            )
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                if (useImg2img) {
-                                    TextButton(
-                                        onClick = { onSelectImageClick() },
-                                        contentPadding = PaddingValues(
-                                            horizontal = 8.dp,
-                                            vertical = 8.dp,
-                                        ),
-                                    ) {
-                                        Text(
-                                            "img2img",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            modifier = Modifier.padding(end = 4.dp),
-                                        )
-                                        Icon(
-                                            Icons.Default.Image,
-                                            contentDescription = "select image",
-                                            modifier = Modifier.size(20.dp),
-                                        )
-                                    }
-                                }
-                                TextButton(
-                                    onClick = { setupState.showAdvancedSettings = true },
-                                    contentPadding = PaddingValues(
-                                        horizontal = 8.dp,
-                                        vertical = 8.dp,
-                                    ),
-                                ) {
-                                    Text(
-                                        stringResource(R.string.advanced_settings),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        modifier = Modifier.padding(end = 4.dp),
-                                    )
-                                    Icon(
-                                        Icons.Default.Settings,
-                                        contentDescription = stringResource(R.string.settings),
-                                        modifier = Modifier.size(20.dp),
-                                    )
-                                }
-                            }
-                            if (setupState.showAdvancedSettings) {
-                                AdvancedSettingsDialog(
-                                    isSdxl = model?.usesFixedCanvas == true,
-                                    runOnCpu = model?.runOnCpu ?: false,
-                                    useImg2img = useImg2img,
-                                    isRunning = runState.isRunning,
-                                    aspectRatio = runState.aspectRatio,
-                                    availableResolutions = setupState.availableResolutions,
-                                    currentWidth = setupState.currentWidth,
-                                    currentHeight = setupState.currentHeight,
-                                    scheduler = runState.scheduler,
-                                    steps = runState.steps,
-                                    cfg = runState.cfg,
-                                    useOpenCL = runState.useOpenCL,
-                                    batchCounts = runState.batchCounts,
-                                    denoiseStrength = runState.denoiseStrength,
-                                    seed = runState.seed,
-                                    returnedSeed = runState.returnedSeed,
-                                    onAspectRatioSelected = { ratio ->
-                                        if (!runState.isRunning && runState.aspectRatio != ratio) {
-                                            runState.aspectRatio = ratio
-                                            clearImg2imgState()
-                                            saveAllFields()
-                                        }
-                                    },
-                                    onCustomAspectRatioClick = {
-                                        if (!runState.isRunning) {
-                                            runState.showCustomAspectRatioDialog = true
-                                        }
-                                    },
-                                    onResolutionSelected = { resolution ->
-                                        if (!runState.isRunning &&
-                                            (
-                                                resolution.width != setupState.currentWidth ||
-                                                    resolution.height != setupState.currentHeight
-                                                )
-                                        ) {
-                                            setupState.pendingResolution = resolution
-                                            setupState.showResolutionChangeDialog = true
-                                        }
-                                    },
-                                    onSchedulerChange = { value ->
-                                        runState.scheduler = value
-                                        saveAllFields()
-                                    },
-                                    onStepsChange = onStepsChange,
-                                    onCfgChange = onCfgChange,
-                                    onSizeChange = onSizeChange,
-                                    onCpuSelected = {
-                                        runState.useOpenCL = false
-                                        saveAllFields()
-                                    },
-                                    onGpuSelected = { setupState.showOpenCLWarningDialog = true },
-                                    onBatchCountsChange = onBatchCountsChange,
-                                    onDenoiseStrengthChange = onDenoiseStrengthChange,
-                                    onSeedChange = onSeedChange,
-                                    onUseLastSeed = {
-                                        runState.seed = runState.returnedSeed.toString()
-                                        saveAllFields()
-                                    },
-                                    onImportFromClipboard = {
-                                        val clipboard =
-                                            context.getSystemService(
-                                                Context.CLIPBOARD_SERVICE,
-                                            ) as? ClipboardManager
-                                        val raw = clipboard?.primaryClip
-                                            ?.takeIf { it.itemCount > 0 }
-                                            ?.getItemAt(0)
-                                            ?.coerceToText(context)
-                                            ?.toString()
-                                        val imported = ParamShare.tryDecode(raw)
-                                        if (imported != null) {
-                                            shareState.pendingImport = imported
-                                            shareState.clipboardImportChecked = true
-                                        } else {
-                                            Toast.makeText(
-                                                context,
-                                                msgImportNoParams,
-                                                Toast.LENGTH_SHORT,
-                                            ).show()
-                                        }
-                                    },
-                                    onShare = {
-                                        val currentMode = when {
-                                            img2ImgState.isInpaintMode -> GenerationMode.INPAINT
-                                            runState.selectedImageUri != null -> GenerationMode.IMG2IMG
-                                            else -> GenerationMode.TXT2IMG
-                                        }
-                                        shareState.shareSourceParams = GenerationParameters(
-                                            steps = runState.steps.toInt(),
-                                            cfg = runState.cfg,
-                                            seed = runState.seed.toLongOrNull(),
-                                            prompt = promptField.text,
-                                            negativePrompt = negativePromptField.text,
-                                            generationTime = null,
-                                            width = setupState.currentWidth,
-                                            height = setupState.currentHeight,
-                                            runOnCpu = model?.runOnCpu ?: false,
-                                            denoiseStrength = runState.denoiseStrength,
-                                            useOpenCL = runState.useOpenCL,
-                                            scheduler = runState.scheduler,
-                                            mode = currentMode,
-                                        )
-                                        shareState.shareSourceModelId = modelId
-                                    },
-                                    onReset = { setupState.showResetConfirmDialog = true },
-                                    onDismiss = { setupState.showAdvancedSettings = false },
-                                )
-                            }
-                        }
+    fun startGeneration() {
 
-                        ControlledPromptTagTextField(
-                            controller = promptField,
-                            autocompleteAvailable = tagAutocompleteAvailable,
-                            modifier = Modifier.fillMaxWidth(),
-                            label = {
-                                PromptCountLabel(
-                                    label = stringResource(R.string.image_prompt),
-                                    count = promptField.tokenCount,
-                                    max = promptField.tokenMax,
-                                    showCount = promptField.text.isNotEmpty(),
-                                )
-                            },
-                        )
+        focusManager.clearFocus()
+        ultrafixState.pendingUltrafix = false
+        Log.d(
+            "ModelRunScreen",
+            "start generation",
+        )
+        setupState.generationParamsTmp = GenerationParameters(
+            steps = runState.steps.roundToInt(),
+            cfg = runState.cfg,
+            seed = 0,
+            prompt = promptField.text,
+            negativePrompt = negativePromptField.text,
+            generationTime = "",
+            width = setupState.currentWidth,
+            height = setupState.currentHeight,
+            runOnCpu = model?.runOnCpu ?: false,
+            denoiseStrength = runState.denoiseStrength,
+            useOpenCL = runState.useOpenCL,
+            scheduler = runState.scheduler,
+        )
 
-                        ControlledPromptTagTextField(
-                            controller = negativePromptField,
-                            autocompleteAvailable = tagAutocompleteAvailable,
-                            modifier = Modifier.fillMaxWidth(),
-                            label = {
-                                PromptCountLabel(
-                                    label = stringResource(R.string.negative_prompt),
-                                    count = negativePromptField.tokenCount,
-                                    max = negativePromptField.tokenMax,
-                                    showCount = negativePromptField.text.isNotEmpty(),
-                                )
-                            },
-                        )
+        Log.d(
+            "ModelRunScreen",
+            "start generation batch: ${runState.batchCounts} times",
+        )
 
-                        RunGenerateButton(
-                            runState = runState,
-                            upscaleState = upscaleState,
-                            ultrafixState = ultrafixState,
-                            modifier = Modifier.fillMaxWidth(),
-                            onGenerateClick = {
-                                focusManager.clearFocus()
-                                ultrafixState.pendingUltrafix = false
-                                Log.d(
-                                    "ModelRunScreen",
-                                    "start generation",
-                                )
-                                setupState.generationParamsTmp = GenerationParameters(
-                                    steps = runState.steps.roundToInt(),
-                                    cfg = runState.cfg,
-                                    seed = 0,
-                                    prompt = promptField.text,
-                                    negativePrompt = negativePromptField.text,
-                                    generationTime = "",
-                                    width = setupState.currentWidth,
-                                    height = setupState.currentHeight,
-                                    runOnCpu = model?.runOnCpu ?: false,
-                                    denoiseStrength = runState.denoiseStrength,
-                                    useOpenCL = runState.useOpenCL,
-                                    scheduler = runState.scheduler,
-                                )
+        // If runState.seed is set, only generate once regardless of batch count
+        val actualBatchCount =
+            if (runState.seed.isNotBlank()) 1 else runState.batchCounts
 
-                                Log.d(
-                                    "ModelRunScreen",
-                                    "start generation batch: ${runState.batchCounts} times",
-                                )
+        batchGenerationJob = coroutineScope.launch {
+            for (i in 0 until actualBatchCount) {
+                runState.currentBatchIndex = i + 1
+                Log.d(
+                    "ModelRunScreen",
+                    "preparing batch $i",
+                )
 
-                                // If runState.seed is set, only generate once regardless of batch count
-                                val actualBatchCount =
-                                    if (runState.seed.isNotBlank()) 1 else runState.batchCounts
+                // Update setupState.generationParamsTmp to reflect current parameters
+                // This allows parameters to be changed during batch execution
+                setupState.generationParamsTmp = GenerationParameters(
+                    steps = runState.steps.roundToInt(),
+                    cfg = runState.cfg,
+                    seed = 0,
+                    prompt = promptField.text,
+                    negativePrompt = negativePromptField.text,
+                    generationTime = "",
+                    width = setupState.currentWidth,
+                    height = setupState.currentHeight,
+                    runOnCpu = model?.runOnCpu ?: false,
+                    denoiseStrength = runState.denoiseStrength,
+                    useOpenCL = runState.useOpenCL,
+                    scheduler = runState.scheduler,
+                )
 
-                                batchGenerationJob = coroutineScope.launch {
-                                    for (i in 0 until actualBatchCount) {
-                                        runState.currentBatchIndex = i + 1
-                                        Log.d(
-                                            "ModelRunScreen",
-                                            "preparing batch $i",
-                                        )
-
-                                        // Update setupState.generationParamsTmp to reflect current parameters
-                                        // This allows parameters to be changed during batch execution
-                                        setupState.generationParamsTmp = GenerationParameters(
-                                            steps = runState.steps.roundToInt(),
-                                            cfg = runState.cfg,
-                                            seed = 0,
-                                            prompt = promptField.text,
-                                            negativePrompt = negativePromptField.text,
-                                            generationTime = "",
-                                            width = setupState.currentWidth,
-                                            height = setupState.currentHeight,
-                                            runOnCpu = model?.runOnCpu ?: false,
-                                            denoiseStrength = runState.denoiseStrength,
-                                            useOpenCL = runState.useOpenCL,
-                                            scheduler = runState.scheduler,
-                                        )
-
-                                        val batchIntent = Intent(
-                                            context,
-                                            BackgroundGenerationService::class.java,
-                                        ).apply {
-                                            putExtra("prompt", promptField.text)
-                                            putExtra(
-                                                "negative_prompt",
-                                                negativePromptField.text,
-                                            )
-                                            putExtra("steps", runState.steps.roundToInt())
-                                            putExtra("cfg", runState.cfg)
-                                            runState.seed.toLongOrNull()
-                                                ?.let { putExtra("seed", it) }
-                                            putExtra("width", setupState.currentWidth)
-                                            putExtra("height", setupState.currentHeight)
-                                            // Backend now crops runState.progress previews to the
-                                            // visible target rectangle, so the service must
-                                            // decode each preview with the effective dims
-                                            // (target_w/h), not the 1024 canvas size.
-                                            putExtra("effective_width", effectiveWidth)
-                                            putExtra("effective_height", effectiveHeight)
-                                            putExtra(
-                                                "denoise_strength",
-                                                runState.denoiseStrength,
-                                            )
-                                            putExtra("use_opencl", runState.useOpenCL)
-                                            putExtra("scheduler", runState.scheduler)
-                                            putExtra("aspect_ratio", runState.aspectRatio)
-                                            putExtra("batch_index", i)
-                                            putExtra("backend_host", backendHost)
-                                            backendAuthToken?.let { putExtra("auth_token", it) }
-                                            if (runState.selectedImageUri != null && runState.base64EncodeDone) {
-                                                putExtra("has_image", true)
-                                                if (img2ImgState.isInpaintMode && img2ImgState.maskBitmap != null) {
-                                                    putExtra("has_mask", true)
-                                                }
-                                            }
-                                        }
-
-                                        Log.d(
-                                            "ModelRunScreen",
-                                            "start service - batch $i",
-                                        )
-
-                                        context.startForegroundService(batchIntent)
-                                        Log.d(
-                                            "ModelRunScreen",
-                                            "start service sent - batch $i",
-                                        )
-
-                                        BackgroundGenerationService.generationState
-                                            .first { state ->
-                                                state is GenerationState.Complete ||
-                                                    state is GenerationState.Error
-                                            }
-
-                                        Log.d(
-                                            "ModelRunScreen",
-                                            "batch $i completed, waiting for service to stop",
-                                        )
-
-                                        // Wait for service to actually stop
-                                        val waitStartTime =
-                                            System.currentTimeMillis()
-                                        val stopped = withTimeoutOrNull(5000L) {
-                                            BackgroundGenerationService.isServiceRunning
-                                                .first { !it }
-                                        }
-                                        if (stopped == null) {
-                                            Log.w(
-                                                "ModelRunScreen",
-                                                "Timeout waiting for service to stop",
-                                            )
-                                        }
-
-                                        Log.d(
-                                            "ModelRunScreen",
-                                            "service stopped, wait time: ${System.currentTimeMillis() - waitStartTime}ms",
-                                        )
-
-                                        BackgroundGenerationService.resetState()
-                                        Log.d(
-                                            "ModelRunScreen",
-                                            "service state reset, ready for next batch",
-                                        )
-                                    }
-                                    runState.currentBatchIndex = 0
-                                    runState.isRunning = false
-                                    Log.d(
-                                        "ModelRunScreen",
-                                        "all batches completed, isRunning set to false",
-                                    )
-                                }
-                            },
-                        )
-                    }
-                }
-            }
-            AnimatedVisibility(
-                visible = runState.errorMessage != null,
-                enter = expandVertically() + fadeIn(),
-                exit = shrinkVertically() + fadeOut(),
-            ) {
-                runState.errorMessage?.let { msg ->
-                    Card(
-                        onClick = { runState.errorMessage = null },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer,
-                        ),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                Icons.Default.Error,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error,
-                            )
-                            Text(
-                                msg,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
+                val batchIntent = Intent(
+                    context,
+                    BackgroundGenerationService::class.java,
+                ).apply {
+                    putExtra("prompt", promptField.text)
+                    putExtra(
+                        "negative_prompt",
+                        negativePromptField.text,
+                    )
+                    putExtra("steps", runState.steps.roundToInt())
+                    putExtra("cfg", runState.cfg)
+                    runState.seed.toLongOrNull()
+                        ?.let { putExtra("seed", it) }
+                    putExtra("width", setupState.currentWidth)
+                    putExtra("height", setupState.currentHeight)
+                    // Backend now crops runState.progress previews to the
+                    // visible target rectangle, so the service must
+                    // decode each preview with the effective dims
+                    // (target_w/h), not the 1024 canvas size.
+                    putExtra("effective_width", effectiveWidth)
+                    putExtra("effective_height", effectiveHeight)
+                    putExtra(
+                        "denoise_strength",
+                        runState.denoiseStrength,
+                    )
+                    putExtra("use_opencl", runState.useOpenCL)
+                    putExtra("scheduler", runState.scheduler)
+                    putExtra("aspect_ratio", runState.aspectRatio)
+                    putExtra("batch_index", i)
+                    putExtra("backend_host", backendHost)
+                    backendAuthToken?.let { putExtra("auth_token", it) }
+                    if (runState.selectedImageUri != null && runState.base64EncodeDone) {
+                        putExtra("has_image", true)
+                        if (img2ImgState.isInpaintMode && img2ImgState.maskBitmap != null) {
+                            putExtra("has_mask", true)
                         }
                     }
                 }
-            }
-            AnimatedVisibility(
-                visible = runState.isRunning,
-                enter = expandVertically() + fadeIn(),
-                exit = shrinkVertically() + fadeOut(),
-            ) {
-                ElevatedCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.large,
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text(
-                            text = if (runState.currentBatchIndex > 0) {
-                                "${
-                                    stringResource(
-                                        R.string.generating,
-                                    )
-                                } (${runState.currentBatchIndex}/${runState.batchCounts})…"
-                            } else {
-                                stringResource(
-                                    R.string.generating,
-                                )
-                            },
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        SmoothLinearWavyProgressIndicator(
-                            progress = runState.progress,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        Text(
-                            "${(runState.progress * 100).toInt()}%",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        resultState.intermediateBitmap?.let { bitmap ->
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Card(
-                                shape = MaterialTheme.shapes.small,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .aspectRatio(1f),
-                            ) {
-                                Image(
-                                    bitmap = bitmap.asImageBitmap(),
-                                    contentDescription = "Generation Preview",
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentScale = ContentScale.Fit,
-                                )
-                            }
-                        }
+
+                Log.d(
+                    "ModelRunScreen",
+                    "start service - batch $i",
+                )
+
+                context.startForegroundService(batchIntent)
+                Log.d(
+                    "ModelRunScreen",
+                    "start service sent - batch $i",
+                )
+
+                BackgroundGenerationService.generationState
+                    .first { state ->
+                        state is GenerationState.Complete ||
+                            state is GenerationState.Error
                     }
+
+                Log.d(
+                    "ModelRunScreen",
+                    "batch $i completed, waiting for service to stop",
+                )
+
+                // Wait for service to actually stop
+                val waitStartTime =
+                    System.currentTimeMillis()
+                val stopped = withTimeoutOrNull(5000L) {
+                    BackgroundGenerationService.isServiceRunning
+                        .first { !it }
                 }
-            }
-
-            AnimatedVisibility(
-                visible = runState.selectedImageUri != null && runState.base64EncodeDone,
-                enter = expandVertically() + fadeIn(),
-                exit = shrinkVertically() + fadeOut(),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Start,
-                    ) {
-                        Card(
-                            modifier = Modifier
-                                .size(100.dp),
-                            shape = MaterialTheme.shapes.small,
-                        ) {
-                            Box {
-                                img2ImgState.croppedBitmap?.let { bitmap ->
-                                    AsyncImage(
-                                        model = ImageRequest.Builder(
-                                            LocalContext.current,
-                                        )
-                                            .data(bitmap)
-                                            .crossfade(true)
-                                            .build(),
-                                        contentDescription = "Cropped Image",
-                                        modifier = Modifier.fillMaxSize(),
-                                    )
-                                } ?: runState.selectedImageUri?.let { uri ->
-                                    AsyncImage(
-                                        model = ImageRequest.Builder(
-                                            LocalContext.current,
-                                        )
-                                            .data(uri)
-                                            .crossfade(true)
-                                            .build(),
-                                        contentDescription = "Selected Image",
-                                        modifier = Modifier.fillMaxSize(),
-                                    )
-                                }
-                                IconButton(
-                                    onClick = {
-                                        runState.selectedImageUri = null
-                                        img2ImgState.croppedBitmap = null
-                                        img2ImgState.drawingOverlayBitmap = null
-                                        img2ImgState.maskBitmap = null
-                                        img2ImgState.isInpaintMode = false
-                                        img2ImgState.cropRect = null
-                                        img2ImgState.savedPathHistory = null
-                                        img2ImgState.hasOriginalImageForStitch = false
-                                    },
-                                    modifier = Modifier
-                                        .size(24.dp)
-                                        .background(
-                                            color = MaterialTheme.colorScheme.surface.copy(
-                                                alpha = 0.7f,
-                                            ),
-                                            shape = CircleShape,
-                                        )
-                                        .align(Alignment.TopEnd),
-                                ) {
-                                    Icon(
-                                        Icons.Default.Clear,
-                                        contentDescription = "Remove Image",
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                }
-                                IconButton(
-                                    onClick = {
-                                        img2ImgState.showDrawScreen = true
-                                    },
-                                    enabled = !runState.isRunning && img2ImgState.croppedBitmap != null,
-                                    modifier = Modifier
-                                        .size(24.dp)
-                                        .background(
-                                            color = MaterialTheme.colorScheme.surface.copy(
-                                                alpha = 0.7f,
-                                            ),
-                                            shape = CircleShape,
-                                        )
-                                        .align(Alignment.TopStart),
-                                ) {
-                                    Icon(
-                                        Icons.Default.Draw,
-                                        contentDescription = "Draw Image",
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                }
-                            }
-                        }
-
-                        AnimatedVisibility(
-                            visible = img2ImgState.croppedBitmap != null && !img2ImgState.isInpaintMode,
-                            enter = fadeIn() + expandHorizontally(),
-                            exit = fadeOut() + shrinkHorizontally(),
-                        ) {
-                            Row {
-                                Spacer(modifier = Modifier.width(12.dp))
-                                SmallFloatingActionButton(
-                                    onClick = {
-                                        if (img2ImgState.croppedBitmap != null) {
-                                            img2ImgState.showInpaintScreen = true
-                                        } else {
-                                            Toast.makeText(
-                                                context,
-                                                msgPleaseCropFirst,
-                                                Toast.LENGTH_SHORT,
-                                            ).show()
-                                        }
-                                    },
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Brush,
-                                        contentDescription = "Set Mask",
-                                    )
-                                }
-                            }
-                        }
-
-                        AnimatedVisibility(
-                            visible = img2ImgState.isInpaintMode && img2ImgState.maskBitmap != null,
-                            enter = fadeIn() + expandHorizontally(),
-                            exit = fadeOut() + shrinkHorizontally(),
-                        ) {
-                            Row {
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Card(
-                                    onClick = {
-                                        if (img2ImgState.croppedBitmap != null && img2ImgState.maskBitmap != null) {
-                                            img2ImgState.showInpaintScreen = true
-                                        }
-                                    },
-                                    modifier = Modifier.size(100.dp),
-                                    shape = MaterialTheme.shapes.small,
-                                ) {
-                                    Box {
-                                        img2ImgState.maskBitmap?.let { mb ->
-                                            AsyncImage(
-                                                model = ImageRequest.Builder(
-                                                    LocalContext.current,
-                                                )
-                                                    .data(mb)
-                                                    .crossfade(true)
-                                                    .build(),
-                                                contentDescription = "Mask Image",
-                                                modifier = Modifier.fillMaxSize(),
-                                            )
-                                        }
-                                        IconButton(
-                                            onClick = {
-                                                img2ImgState.maskBitmap = null
-                                                img2ImgState.isInpaintMode = false
-                                                img2ImgState.savedPathHistory = null
-                                            },
-                                            modifier = Modifier
-                                                .size(24.dp)
-                                                .background(
-                                                    color = MaterialTheme.colorScheme.surface.copy(
-                                                        alpha = 0.7f,
-                                                    ),
-                                                    shape = CircleShape,
-                                                )
-                                                .align(Alignment.TopEnd),
-                                        ) {
-                                            Icon(
-                                                Icons.Default.Clear,
-                                                contentDescription = "Clear Mask",
-                                                modifier = Modifier.size(16.dp),
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                if (stopped == null) {
+                    Log.w(
+                        "ModelRunScreen",
+                        "Timeout waiting for service to stop",
+                    )
                 }
+
+                Log.d(
+                    "ModelRunScreen",
+                    "service stopped, wait time: ${System.currentTimeMillis() - waitStartTime}ms",
+                )
+
+                BackgroundGenerationService.resetState()
+                Log.d(
+                    "ModelRunScreen",
+                    "service state reset, ready for next batch",
+                )
             }
+            runState.currentBatchIndex = 0
+            runState.isRunning = false
+            Log.d(
+                "ModelRunScreen",
+                "all batches completed, isRunning set to false",
+            )
         }
     }
 
@@ -2206,7 +1670,32 @@ fun ModelRunScreen(
                         .consumeWindowInsets(paddingValues),
                 ) { page ->
                     when (page) {
-                        0 -> PromptPage()
+                        0 ->
+                            RunPromptPage(
+                                runState = runState,
+                                resultState = resultState,
+                                setupState = setupState,
+                                upscaleState = upscaleState,
+                                ultrafixState = ultrafixState,
+                                img2ImgState = img2ImgState,
+                                shareState = shareState,
+                                promptField = promptField,
+                                negativePromptField = negativePromptField,
+                                model = model,
+                                modelId = modelId,
+                                useImg2img = useImg2img,
+                                tagAutocompleteAvailable = tagAutocompleteAvailable,
+                                onStepsChange = onStepsChange,
+                                onCfgChange = onCfgChange,
+                                onSizeChange = onSizeChange,
+                                onBatchCountsChange = onBatchCountsChange,
+                                onDenoiseStrengthChange = onDenoiseStrengthChange,
+                                onSeedChange = onSeedChange,
+                                onSelectImageClick = { onSelectImageClick() },
+                                onClearImg2imgState = { clearImg2imgState() },
+                                onSaveAllFields = { saveAllFields() },
+                                onGenerateClick = { startGeneration() },
+                            )
 
                         1 -> ModelRunResultPage(
                             currentBitmap = resultState.currentBitmap,
@@ -2770,13 +2259,3 @@ fun ModelRunScreen(
     }
 }
 
-@Composable
-private fun PromptCountLabel(label: String, count: Int, max: Int, showCount: Boolean) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label)
-        if (showCount) {
-            Spacer(Modifier.width(6.dp))
-            Text("$count/$max")
-        }
-    }
-}
