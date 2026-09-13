@@ -19,18 +19,13 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -62,7 +57,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ContainedLoadingIndicator
@@ -71,7 +65,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
@@ -133,7 +126,6 @@ import io.github.xororz.localdream.ui.components.OverlayIconButton
 import io.github.xororz.localdream.ui.components.ShareParamsFlow
 import io.github.xororz.localdream.ui.components.SmoothLinearWavyProgressIndicator
 import io.github.xororz.localdream.ui.components.ZoomableImageOverlay
-import io.github.xororz.localdream.ui.theme.Motion
 import io.github.xororz.localdream.utils.LogCapture
 import io.github.xororz.localdream.utils.ParamShare
 import io.github.xororz.localdream.utils.ParamShareField
@@ -1857,8 +1849,12 @@ fun ModelRunScreen(
                             },
                         )
 
-                        Button(
-                            onClick = {
+                        RunGenerateButton(
+                            runState = runState,
+                            upscaleState = upscaleState,
+                            ultrafixState = ultrafixState,
+                            modifier = Modifier.fillMaxWidth(),
+                            onGenerateClick = {
                                 focusManager.clearFocus()
                                 ultrafixState.pendingUltrafix = false
                                 Log.d(
@@ -2008,39 +2004,7 @@ fun ModelRunScreen(
                                     )
                                 }
                             },
-                            enabled = serviceState !is GenerationState.Progress &&
-                                !runState.isRunning && !upscaleState.isUpscaling && !ultrafixState.isUltrafixPreparing,
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = MaterialTheme.shapes.medium,
-                        ) {
-                            AnimatedContent(
-                                targetState = serviceState is GenerationState.Progress || upscaleState.isUpscaling,
-                                transitionSpec = {
-                                    (
-                                        fadeIn(animationSpec = tween(Motion.DurationShort)) + scaleIn(
-                                            initialScale = 0.8f,
-                                            animationSpec = tween(Motion.DurationShort),
-                                        )
-                                        )
-                                        .togetherWith(
-                                            fadeOut(animationSpec = tween(Motion.DurationShort)) + scaleOut(
-                                                targetScale = 0.8f,
-                                                animationSpec = tween(Motion.DurationShort),
-                                            ),
-                                        )
-                                },
-                                label = "GenerateButtonContent",
-                            ) { isLoading ->
-                                if (isLoading) {
-                                    LoadingIndicator(
-                                        modifier = Modifier.size(24.dp),
-                                        color = MaterialTheme.colorScheme.onPrimary,
-                                    )
-                                } else {
-                                    Text(stringResource(R.string.generate_image))
-                                }
-                            }
-                        }
+                        )
                     }
                 }
             }
