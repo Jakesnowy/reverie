@@ -134,7 +134,6 @@ import io.github.xororz.localdream.utils.performUpscale
 import io.github.xororz.localdream.utils.reportImage
 import io.github.xororz.localdream.utils.saveImage
 import java.io.File
-import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -154,7 +153,6 @@ fun ModelRunScreen(
     modifier: Modifier = Modifier,
     isRemote: Boolean = false,
 ) {
-    val serviceState by BackgroundGenerationService.generationState.collectAsState()
     val backendState by BackendService.backendState.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -1258,143 +1256,21 @@ fun ModelRunScreen(
         }
     }
 
-    LaunchedEffect(serviceState) {
-        when (val state = serviceState) {
-            is GenerationState.Progress -> {
-                if (runState.generationStartTime == null) {
-                    runState.generationStartTime = System.currentTimeMillis()
-                }
-                runState.progress = state.progress
-                runState.isRunning = true
-                state.intermediateImage?.let { resultState.intermediateBitmap = it }
-            }
-
-            is GenerationState.Complete -> {
-                resultState.intermediateBitmap = null
-                withContext(Dispatchers.Main) {
-                    Log.d("ModelRunScreen", "update bitmap")
-
-                    state.seed?.let { runState.returnedSeed = it }
-                    runState.progress = 0f
-
-                    val genTime = runState.generationStartTime?.let { startTime ->
-                        val endTime = System.currentTimeMillis()
-                        val duration = endTime - startTime
-                        when {
-                            duration < 1000 -> "${duration}ms"
-
-                            duration < 60000 -> String.format(Locale.US, "%.1fs", duration / 1000.0)
-
-                            else -> String.format(
-                                Locale.US,
-                                "%dm%ds",
-                                duration / 60000,
-                                (duration % 60000) / 1000,
-                            )
-                        }
-                    }
-
-                    val wasUltrafix = ultrafixState.pendingUltrafix
-                    ultrafixState.pendingUltrafix = false
-                    val currentGenerationMode = when {
-                        wasUltrafix -> GenerationMode.ULTRAFIX
-                        img2ImgState.isInpaintMode -> GenerationMode.INPAINT
-                        runState.selectedImageUri != null -> GenerationMode.IMG2IMG
-                        else -> GenerationMode.TXT2IMG
-                    }
-
-                    val newParams = GenerationParameters(
-                        steps = setupState.generationParamsTmp.steps,
-                        cfg = setupState.generationParamsTmp.cfg,
-                        seed = runState.returnedSeed,
-                        prompt = setupState.generationParamsTmp.prompt,
-                        negativePrompt = setupState.generationParamsTmp.negativePrompt,
-                        generationTime = genTime,
-                        width = if (model?.runOnCpu == true) setupState.generationParamsTmp.width else state.bitmap.width,
-                        height = if (model?.runOnCpu == true) setupState.generationParamsTmp.height else state.bitmap.height,
-                        runOnCpu = model?.runOnCpu ?: false,
-                        denoiseStrength = setupState.generationParamsTmp.denoiseStrength,
-                        useOpenCL = setupState.generationParamsTmp.useOpenCL,
-                        scheduler = setupState.generationParamsTmp.scheduler,
-                        mode = currentGenerationMode,
-                        nsfwScore = state.nsfwScore,
-                    )
-
-                    // Save to disk and update history list. The saved item's id is
-                    // forwarded to both the snapshot and the currently-displayed marker
-                    // so handleSaveImage can later confirm the user is still looking at
-                    // this generation (and not a different history thumbnail).
-                    coroutineScope.launch(Dispatchers.IO) {
-                        val savedItem = historyManager.saveGeneratedImage(
-                            modelId = modelId,
-                            bitmap = state.bitmap,
-                            params = newParams,
-                            mode = currentGenerationMode,
-                        )
-                        if (savedItem != null) {
-                            withContext(Dispatchers.Main) {
-                                // An ultrafix result is a standalone image, not a
-                                // stitchable inpaint patch.
-                                if (!wasUltrafix) {
-                                    resultState.stitchableHistoryIds = setOf(savedItem.id)
-                                }
-                                resultState.currentDisplayedHistoryId = savedItem.id
-                            }
-                        }
-                    }
-
-                    resultState.currentBitmap = state.bitmap
-                    resultState.generationParams = newParams
-                    resultState.generationParamsModelId = modelId
-                    resultState.imageVersion += 1
-
-                    if (!wasUltrafix) {
-                        img2ImgState.snapshotIsInpaintMode = img2ImgState.isInpaintMode
-                        img2ImgState.snapshotSelectedImageUri = runState.selectedImageUri
-                        img2ImgState.snapshotCropRect = img2ImgState.cropRect
-                        img2ImgState.snapshotMaskBitmap = if (img2ImgState.isInpaintMode) img2ImgState.maskBitmap else null
-                        img2ImgState.snapshotDrawingOverlayBitmap = img2ImgState.drawingOverlayBitmap
-                        img2ImgState.snapshotHasOriginalImage = img2ImgState.hasOriginalImageForStitch
-                    }
-                    // resultState.stitchableHistoryIds / resultState.currentDisplayedHistoryId are set once
-                    // the DB save above resolves.
-                    resultState.stitchableHistoryIds = emptySet()
-                    resultState.currentDisplayedHistoryId = null
-
-                    Log.d(
-                        "ModelRunScreen",
-                        "params update: ${resultState.generationParams?.steps}, ${resultState.generationParams?.cfg}",
-                    )
-
-                    runState.generationStartTime = null
-
-                    if (pagerState.currentPage == 0 && !setupState.showAdvancedSettings) {
-                        try {
-                            pagerState.animateScrollToPage(1)
-                        } finally {
-                            BackgroundGenerationService.markBitmapConsumed()
-                        }
-                    } else {
-                        BackgroundGenerationService.markBitmapConsumed()
-                    }
-                }
-            }
-
-            is GenerationState.Error -> {
-                resultState.intermediateBitmap = null
-                runState.errorMessage = state.message
-                runState.isRunning = false
-                runState.progress = 0f
-                runState.generationStartTime = null
-                ultrafixState.pendingUltrafix = false
-            }
-
-            else -> {
-                runState.isRunning = false
-                runState.progress = 0f
-            }
-        }
-    }
+    // Generation-service state machine (progress / complete / error).
+    // Collects the service flow inside its own scope so progress ticks never
+    // recompose the screen orchestrator.
+    RunGenerationEffects(
+        runState = runState,
+        resultState = resultState,
+        setupState = setupState,
+        ultrafixState = ultrafixState,
+        img2ImgState = img2ImgState,
+        model = model,
+        modelId = modelId,
+        historyManager = historyManager,
+        pagerState = pagerState,
+        coroutineScope = coroutineScope,
+    )
 
     // Only intercept back while a generation is running: back then offers to
     // interrupt the generation and stays on the screen (a second back exits).
