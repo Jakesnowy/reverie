@@ -390,36 +390,14 @@ fun ModelRunScreen(
         embeddingNames = names
     }
 
-    var showCropScreen by remember { mutableStateOf(false) }
-    var imageUriForCrop by remember { mutableStateOf<Uri?>(null) }
-    var croppedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    // Img2Img / Inpaint source-editing state (crop/draw/inpaint toggles,
+    // working bitmaps, generation-time snapshots). The generation-effects
+    // machine and the source screens read these fields; hoisted so the
+    // upcoming RunGenerationEffects region can take the holder as a param.
+    val img2ImgState = remember { RunImg2ImgState() }
 
-    var showInpaintScreen by remember { mutableStateOf(false) }
-    var maskBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var isInpaintMode by remember { mutableStateOf(false) }
-    var savedPathHistory by remember { mutableStateOf<List<PathData>?>(null) }
-    var cropRect by remember { mutableStateOf<AndroidRect?>(null) }
-
-    var showDrawScreen by remember { mutableStateOf(false) }
-    // Transparent edits are also retained for full-image inpaint exports.
-    var drawingOverlayBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var snapshotDrawingOverlayBitmap by remember { mutableStateOf<Bitmap?>(null) }
-
-    // True only when runState.selectedImageUri points to a real source image from the gallery picker.
-    // False when img2img was seeded from a result/history bitmap (runState.selectedImageUri is a
-    // synthetic tmp.txt path that holds base64, not a decodable image).
-    var hasOriginalImageForStitch by remember { mutableStateOf(false) }
-
-    var snapshotIsInpaintMode by remember { mutableStateOf(false) }
-    var snapshotSelectedImageUri by remember { mutableStateOf<Uri?>(null) }
-    var snapshotCropRect by remember { mutableStateOf<AndroidRect?>(null) }
-    var snapshotMaskBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var snapshotHasOriginalImage by remember { mutableStateOf(false) }
-    // History-item ids whose bitmaps may be stitched back into the inpaint source:
-    // the just-completed inpaint generation plus any upscaled copies derived from
-    // it. Compared against resultState.currentDisplayedHistoryId so saving only stitches when
-    // the bitmap on screen really is one of those (regardless of whether it's the
-    // original Bitmap object or a fresh decode from clicking the thumbnail again).
+    // Favorite flag of the image currently on the result page, looked up by id
+    // so it stays correct even when the row isn't in a loaded history page.
 
     // Favorite flag of the image currently on the result page, looked up by id
     // so it stays correct even when the row isn't in a loaded history page.
@@ -470,14 +448,14 @@ fun ModelRunScreen(
 
     fun clearImg2imgState() {
         runState.selectedImageUri = null
-        croppedBitmap = null
-        drawingOverlayBitmap = null
-        maskBitmap = null
-        isInpaintMode = false
-        cropRect = null
-        savedPathHistory = null
+        img2ImgState.croppedBitmap = null
+        img2ImgState.drawingOverlayBitmap = null
+        img2ImgState.maskBitmap = null
+        img2ImgState.isInpaintMode = false
+        img2ImgState.cropRect = null
+        img2ImgState.savedPathHistory = null
         runState.base64EncodeDone = false
-        hasOriginalImageForStitch = false
+        img2ImgState.hasOriginalImageForStitch = false
     }
 
     fun saveAllFields() {
@@ -573,20 +551,20 @@ fun ModelRunScreen(
     }
 
     fun processSelectedImage(uri: Uri) {
-        imageUriForCrop = uri
-        showCropScreen = true
+        img2ImgState.imageUriForCrop = uri
+        img2ImgState.showCropScreen = true
     }
 
     @Suppress("UnusedParameter") // base64String from cropify callback is re-derived later
     fun handleCropComplete(base64String: String, bitmap: Bitmap, rect: AndroidRect) {
-        showCropScreen = false
-        val sourceUri = imageUriForCrop
+        img2ImgState.showCropScreen = false
+        val sourceUri = img2ImgState.imageUriForCrop
         runState.selectedImageUri = sourceUri
-        imageUriForCrop = null
-        hasOriginalImageForStitch = true
+        img2ImgState.imageUriForCrop = null
+        img2ImgState.hasOriginalImageForStitch = true
 
         // CropImageScreen returns the cropped bitmap via cropify, whose output
-        // can carry a sub-pixel offset relative to the cropRect we computed
+        // can carry a sub-pixel offset relative to the img2ImgState.cropRect we computed
         // from frameRect / imageRect. That's invisible when the patch is later
         // pasted back as a whole (SD1.5 / SDXL 1:1), but in SDXL aspect-pad
         // mode the patch goes through scale → pad → backend center-crop →
@@ -594,8 +572,8 @@ fun ModelRunScreen(
         // few-pixel stitch misalignment.
         //
         // Fix: re-crop directly from the original image using BitmapRegionDecoder
-        // so the bitmap content is *strictly* the cropRect region in the
-        // original's coordinate space. cropRect is also clamped to the original
+        // so the bitmap content is *strictly* the img2ImgState.cropRect region in the
+        // original's coordinate space. img2ImgState.cropRect is also clamped to the original
         // bounds, and the clamped value is saved so stitch later paints to the
         // exact same pixel range we cropped from.
         scope.launch(Dispatchers.IO) {
@@ -665,9 +643,9 @@ fun ModelRunScreen(
                 }
 
                 withContext(Dispatchers.Main) {
-                    cropRect = clampedRect
-                    croppedBitmap = scaled
-                    drawingOverlayBitmap = null
+                    img2ImgState.cropRect = clampedRect
+                    img2ImgState.croppedBitmap = scaled
+                    img2ImgState.drawingOverlayBitmap = null
                 }
 
                 val tmpFile = File(context.filesDir, "tmp.txt")
@@ -681,20 +659,20 @@ fun ModelRunScreen(
                         Toast.LENGTH_SHORT,
                     ).show()
                     runState.selectedImageUri = null
-                    croppedBitmap = null
-                    drawingOverlayBitmap = null
-                    cropRect = null
-                    hasOriginalImageForStitch = false
+                    img2ImgState.croppedBitmap = null
+                    img2ImgState.drawingOverlayBitmap = null
+                    img2ImgState.cropRect = null
+                    img2ImgState.hasOriginalImageForStitch = false
                 }
             }
         }
     }
 
     fun handleInpaintComplete(maskBase64: String, maskBmp: Bitmap, pathHistory: List<PathData>) {
-        showInpaintScreen = false
-        isInpaintMode = true
-        maskBitmap = maskBmp
-        savedPathHistory = pathHistory
+        img2ImgState.showInpaintScreen = false
+        img2ImgState.isInpaintMode = true
+        img2ImgState.maskBitmap = maskBmp
+        img2ImgState.savedPathHistory = pathHistory
 
         scope.launch(Dispatchers.IO) {
             try {
@@ -721,9 +699,9 @@ fun ModelRunScreen(
                         msgSaveFailed.format(e.message ?: msgUnknownError),
                         Toast.LENGTH_SHORT,
                     ).show()
-                    isInpaintMode = false
-                    maskBitmap = null
-                    savedPathHistory = null
+                    img2ImgState.isInpaintMode = false
+                    img2ImgState.maskBitmap = null
+                    img2ImgState.savedPathHistory = null
                 }
             }
         }
@@ -779,11 +757,11 @@ fun ModelRunScreen(
                     File(context.filesDir, "tmp.txt").writeText(base64String)
                 }
 
-                croppedBitmap = displayBitmap
-                drawingOverlayBitmap = null
-                cropRect = AndroidRect(0, 0, displayBitmap.width, displayBitmap.height)
+                img2ImgState.croppedBitmap = displayBitmap
+                img2ImgState.drawingOverlayBitmap = null
+                img2ImgState.cropRect = AndroidRect(0, 0, displayBitmap.width, displayBitmap.height)
                 runState.selectedImageUri = Uri.fromFile(File(context.filesDir, "tmp.txt"))
-                hasOriginalImageForStitch = false
+                img2ImgState.hasOriginalImageForStitch = false
                 runState.base64EncodeDone = true
                 true
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -796,10 +774,10 @@ fun ModelRunScreen(
                 ).show()
                 runState.base64EncodeDone = false
                 runState.selectedImageUri = null
-                croppedBitmap = null
-                drawingOverlayBitmap = null
-                cropRect = null
-                hasOriginalImageForStitch = false
+                img2ImgState.croppedBitmap = null
+                img2ImgState.drawingOverlayBitmap = null
+                img2ImgState.cropRect = null
+                img2ImgState.hasOriginalImageForStitch = false
                 false
             }
 
@@ -995,10 +973,10 @@ fun ModelRunScreen(
         //    don't stitch), and
         //  - the source img2img/inpaint image was a real gallery image with a decodable
         //    URI (not a synthetic tmp.txt from sendBitmapToImg2img).
-        val shouldStitch = snapshotIsInpaintMode &&
-            snapshotCropRect != null &&
-            snapshotSelectedImageUri != null &&
-            snapshotHasOriginalImage &&
+        val shouldStitch = img2ImgState.snapshotIsInpaintMode &&
+            img2ImgState.snapshotCropRect != null &&
+            img2ImgState.snapshotSelectedImageUri != null &&
+            img2ImgState.snapshotHasOriginalImage &&
             resultState.currentDisplayedHistoryId != null &&
             resultState.currentDisplayedHistoryId in resultState.stitchableHistoryIds
 
@@ -1007,18 +985,18 @@ fun ModelRunScreen(
                 withContext(Dispatchers.IO) {
                     try {
                         val originalBitmap =
-                            context.contentResolver.openInputStream(snapshotSelectedImageUri!!)!!
+                            context.contentResolver.openInputStream(img2ImgState.snapshotSelectedImageUri!!)!!
                                 .use { BitmapFactory.decodeStream(it) }
 
                         val mutableOriginal =
                             originalBitmap.copy(Bitmap.Config.ARGB_8888, true)
 
-                        snapshotDrawingOverlayBitmap?.let { drawing ->
-                            drawImageOverlay(mutableOriginal, drawing, snapshotCropRect!!)
+                        img2ImgState.snapshotDrawingOverlayBitmap?.let { drawing ->
+                            drawImageOverlay(mutableOriginal, drawing, img2ImgState.snapshotCropRect!!)
                         }
 
-                        val rectW = snapshotCropRect!!.width()
-                        val rectH = snapshotCropRect!!.height()
+                        val rectW = img2ImgState.snapshotCropRect!!.width()
+                        val rectH = img2ImgState.snapshotCropRect!!.height()
                         val resizedPatch = bitmap.scale(rectW, rectH)
 
                         // Feather-blend along the mask instead of pasting the
@@ -1028,9 +1006,9 @@ fun ModelRunScreen(
                         drawInpaintPatch(
                             target = mutableOriginal,
                             patch = resizedPatch,
-                            mask = snapshotMaskBitmap,
-                            left = snapshotCropRect!!.left,
-                            top = snapshotCropRect!!.top,
+                            mask = img2ImgState.snapshotMaskBitmap,
+                            left = img2ImgState.snapshotCropRect!!.left,
+                            top = img2ImgState.snapshotCropRect!!.top,
                         )
 
                         saveImage(
@@ -1320,7 +1298,7 @@ fun ModelRunScreen(
                     ultrafixState.pendingUltrafix = false
                     val currentGenerationMode = when {
                         wasUltrafix -> GenerationMode.ULTRAFIX
-                        isInpaintMode -> GenerationMode.INPAINT
+                        img2ImgState.isInpaintMode -> GenerationMode.INPAINT
                         runState.selectedImageUri != null -> GenerationMode.IMG2IMG
                         else -> GenerationMode.TXT2IMG
                     }
@@ -1371,12 +1349,12 @@ fun ModelRunScreen(
                     resultState.imageVersion += 1
 
                     if (!wasUltrafix) {
-                        snapshotIsInpaintMode = isInpaintMode
-                        snapshotSelectedImageUri = runState.selectedImageUri
-                        snapshotCropRect = cropRect
-                        snapshotMaskBitmap = if (isInpaintMode) maskBitmap else null
-                        snapshotDrawingOverlayBitmap = drawingOverlayBitmap
-                        snapshotHasOriginalImage = hasOriginalImageForStitch
+                        img2ImgState.snapshotIsInpaintMode = img2ImgState.isInpaintMode
+                        img2ImgState.snapshotSelectedImageUri = runState.selectedImageUri
+                        img2ImgState.snapshotCropRect = img2ImgState.cropRect
+                        img2ImgState.snapshotMaskBitmap = if (img2ImgState.isInpaintMode) img2ImgState.maskBitmap else null
+                        img2ImgState.snapshotDrawingOverlayBitmap = img2ImgState.drawingOverlayBitmap
+                        img2ImgState.snapshotHasOriginalImage = img2ImgState.hasOriginalImageForStitch
                     }
                     // resultState.stitchableHistoryIds / resultState.currentDisplayedHistoryId are set once
                     // the DB save above resolves.
@@ -1811,7 +1789,7 @@ fun ModelRunScreen(
                                     },
                                     onShare = {
                                         val currentMode = when {
-                                            isInpaintMode -> GenerationMode.INPAINT
+                                            img2ImgState.isInpaintMode -> GenerationMode.INPAINT
                                             runState.selectedImageUri != null -> GenerationMode.IMG2IMG
                                             else -> GenerationMode.TXT2IMG
                                         }
@@ -1960,7 +1938,7 @@ fun ModelRunScreen(
                                             backendAuthToken?.let { putExtra("auth_token", it) }
                                             if (runState.selectedImageUri != null && runState.base64EncodeDone) {
                                                 putExtra("has_image", true)
-                                                if (isInpaintMode && maskBitmap != null) {
+                                                if (img2ImgState.isInpaintMode && img2ImgState.maskBitmap != null) {
                                                     putExtra("has_mask", true)
                                                 }
                                             }
@@ -2134,7 +2112,7 @@ fun ModelRunScreen(
                             shape = MaterialTheme.shapes.small,
                         ) {
                             Box {
-                                croppedBitmap?.let { bitmap ->
+                                img2ImgState.croppedBitmap?.let { bitmap ->
                                     AsyncImage(
                                         model = ImageRequest.Builder(
                                             LocalContext.current,
@@ -2160,13 +2138,13 @@ fun ModelRunScreen(
                                 IconButton(
                                     onClick = {
                                         runState.selectedImageUri = null
-                                        croppedBitmap = null
-                                        drawingOverlayBitmap = null
-                                        maskBitmap = null
-                                        isInpaintMode = false
-                                        cropRect = null
-                                        savedPathHistory = null
-                                        hasOriginalImageForStitch = false
+                                        img2ImgState.croppedBitmap = null
+                                        img2ImgState.drawingOverlayBitmap = null
+                                        img2ImgState.maskBitmap = null
+                                        img2ImgState.isInpaintMode = false
+                                        img2ImgState.cropRect = null
+                                        img2ImgState.savedPathHistory = null
+                                        img2ImgState.hasOriginalImageForStitch = false
                                     },
                                     modifier = Modifier
                                         .size(24.dp)
@@ -2186,9 +2164,9 @@ fun ModelRunScreen(
                                 }
                                 IconButton(
                                     onClick = {
-                                        showDrawScreen = true
+                                        img2ImgState.showDrawScreen = true
                                     },
-                                    enabled = !runState.isRunning && croppedBitmap != null,
+                                    enabled = !runState.isRunning && img2ImgState.croppedBitmap != null,
                                     modifier = Modifier
                                         .size(24.dp)
                                         .background(
@@ -2209,7 +2187,7 @@ fun ModelRunScreen(
                         }
 
                         AnimatedVisibility(
-                            visible = croppedBitmap != null && !isInpaintMode,
+                            visible = img2ImgState.croppedBitmap != null && !img2ImgState.isInpaintMode,
                             enter = fadeIn() + expandHorizontally(),
                             exit = fadeOut() + shrinkHorizontally(),
                         ) {
@@ -2217,8 +2195,8 @@ fun ModelRunScreen(
                                 Spacer(modifier = Modifier.width(12.dp))
                                 SmallFloatingActionButton(
                                     onClick = {
-                                        if (croppedBitmap != null) {
-                                            showInpaintScreen = true
+                                        if (img2ImgState.croppedBitmap != null) {
+                                            img2ImgState.showInpaintScreen = true
                                         } else {
                                             Toast.makeText(
                                                 context,
@@ -2237,7 +2215,7 @@ fun ModelRunScreen(
                         }
 
                         AnimatedVisibility(
-                            visible = isInpaintMode && maskBitmap != null,
+                            visible = img2ImgState.isInpaintMode && img2ImgState.maskBitmap != null,
                             enter = fadeIn() + expandHorizontally(),
                             exit = fadeOut() + shrinkHorizontally(),
                         ) {
@@ -2245,15 +2223,15 @@ fun ModelRunScreen(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Card(
                                     onClick = {
-                                        if (croppedBitmap != null && maskBitmap != null) {
-                                            showInpaintScreen = true
+                                        if (img2ImgState.croppedBitmap != null && img2ImgState.maskBitmap != null) {
+                                            img2ImgState.showInpaintScreen = true
                                         }
                                     },
                                     modifier = Modifier.size(100.dp),
                                     shape = MaterialTheme.shapes.small,
                                 ) {
                                     Box {
-                                        maskBitmap?.let { mb ->
+                                        img2ImgState.maskBitmap?.let { mb ->
                                             AsyncImage(
                                                 model = ImageRequest.Builder(
                                                     LocalContext.current,
@@ -2267,9 +2245,9 @@ fun ModelRunScreen(
                                         }
                                         IconButton(
                                             onClick = {
-                                                maskBitmap = null
-                                                isInpaintMode = false
-                                                savedPathHistory = null
+                                                img2ImgState.maskBitmap = null
+                                                img2ImgState.isInpaintMode = false
+                                                img2ImgState.savedPathHistory = null
                                             },
                                             modifier = Modifier
                                                 .size(24.dp)
@@ -2514,43 +2492,43 @@ fun ModelRunScreen(
                 }
             }
         }
-        if (showCropScreen && imageUriForCrop != null) {
+        if (img2ImgState.showCropScreen && img2ImgState.imageUriForCrop != null) {
             val aspectTarget = computeAspectTargetSize(model?.usesFixedCanvas == true, runState.aspectRatio)
             val cropW = aspectTarget?.first ?: setupState.currentWidth
             val cropH = aspectTarget?.second ?: setupState.currentHeight
             CropImageScreen(
-                imageUri = imageUriForCrop!!,
+                imageUri = img2ImgState.imageUriForCrop!!,
                 width = cropW,
                 height = cropH,
                 onCropComplete = { base64String, bitmap, rect ->
                     handleCropComplete(base64String, bitmap, rect)
                 },
                 onCancel = {
-                    showCropScreen = false
-                    imageUriForCrop = null
+                    img2ImgState.showCropScreen = false
+                    img2ImgState.imageUriForCrop = null
                     runState.selectedImageUri = null
-                    hasOriginalImageForStitch = false
+                    img2ImgState.hasOriginalImageForStitch = false
                 },
             )
         }
-        if (showInpaintScreen && croppedBitmap != null) {
+        if (img2ImgState.showInpaintScreen && img2ImgState.croppedBitmap != null) {
             InpaintScreen(
-                originalBitmap = croppedBitmap!!,
-                existingMaskBitmap = if (isInpaintMode) maskBitmap else null,
-                existingPathHistory = savedPathHistory,
-                onInpaintComplete = { maskBase64, originalBitmap, maskBitmap, pathHistory ->
-                    handleInpaintComplete(maskBase64, maskBitmap, pathHistory)
+                originalBitmap = img2ImgState.croppedBitmap!!,
+                existingMaskBitmap = if (img2ImgState.isInpaintMode) img2ImgState.maskBitmap else null,
+                existingPathHistory = img2ImgState.savedPathHistory,
+                onInpaintComplete = { maskBase64, originalBitmap, completedMaskBitmap, pathHistory ->
+                    handleInpaintComplete(maskBase64, completedMaskBitmap, pathHistory)
                 },
                 onCancel = {
-                    showInpaintScreen = false
+                    img2ImgState.showInpaintScreen = false
                 },
             )
         }
-        if (showDrawScreen && croppedBitmap != null) {
+        if (img2ImgState.showDrawScreen && img2ImgState.croppedBitmap != null) {
             DrawScreen(
-                originalBitmap = croppedBitmap!!,
+                originalBitmap = img2ImgState.croppedBitmap!!,
                 onDrawingSaved = { sketchedBitmap, drawing ->
-                    val previousDrawing = drawingOverlayBitmap
+                    val previousDrawing = img2ImgState.drawingOverlayBitmap
                     val combinedDrawing = withContext(Dispatchers.Default) {
                         mergeDrawingLayers(previousDrawing, drawing)
                     }
@@ -2561,12 +2539,12 @@ fun ModelRunScreen(
                         File(context.filesDir, "tmp.txt").writeText(payload)
                         if (upload !== sketchedBitmap) upload.recycle()
                     }
-                    croppedBitmap = sketchedBitmap
-                    drawingOverlayBitmap = combinedDrawing
-                    showDrawScreen = false
+                    img2ImgState.croppedBitmap = sketchedBitmap
+                    img2ImgState.drawingOverlayBitmap = combinedDrawing
+                    img2ImgState.showDrawScreen = false
                 },
                 onNavigateBack = {
-                    showDrawScreen = false
+                    img2ImgState.showDrawScreen = false
                 },
             )
         }
