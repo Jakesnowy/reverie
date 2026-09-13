@@ -4,8 +4,10 @@ on:
   push:
     branches: [master]
   pull_request:
-  # Beta releases: run manually against any ref once a master state is
-  # beta-worthy. Debug releases stay automatic on master pushes.
+  # Releases (beta and test/debug) are cut manually via workflow_dispatch
+  # against any ref — nothing publishes automatically on push. Installable
+  # debug APKs for everyday testing are built locally instead, which keeps
+  # the CI queue free for lint/compile checks and deliberate releases.
   workflow_dispatch:
     inputs:
       release_kind:
@@ -34,12 +36,9 @@ jobs:
       # Native engine + cpp/3rdparty submodules are intentionally not built
       # here: the engine has its own OS-specific build scripts
       # (app/src/main/cpp/build.sh / build.bat) and CI adds little to what
-      # both platforms already validate locally. Kotlin compile + lint + a
-      # real APK assembly run on every push.
-      # Master pushes get their APKs from the test-release job (both flavors,
-      # native engine included) — assembling here would duplicate that work
-      # on a second runner. PRs have no release job, so assemble to validate
-      # packaging.
+      # both platforms already validate locally. Kotlin lint/compile runs on
+      # every push. PRs have no release job, so assemble to validate
+      # packaging; master pushes don't assemble here (releases are manual).
       - name: Lint and compile
         run: >
           ./gradlew
@@ -52,17 +51,16 @@ jobs:
         if: github.event_name == 'pull_request'
         run: ./gradlew assembleBasicDebug --stacktrace
 
-  # Publishes installable builds to GitHub releases — one release per master
-  # push (tag debug-<sha>, changelog from the commit history), so testers can
-  # pick a specific build instead of digging through a rolling asset pile.
+  # Publishes installable builds to GitHub releases — cut manually via
+  # workflow_dispatch (one release per run, tag <kind>-<sha>, changelog from
+  # the commit history), so testers can pick a specific build instead of
+  # digging through a rolling asset pile.
   # Requires the QAIRT SDK (public community download), NDK r28 (r29-built
   # engines fail on device - see Codebase_Walkthrough.md) and Rust 1.85 with
   # the Android target for tokenizers-cpp. APKs are signed with the
   # repo-committed ci/debug.keystore so successive CI builds upgrade in place.
   test-release:
-    if: >-
-      github.ref == 'refs/heads/master' &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: github.event_name == 'workflow_dispatch'
     needs: lint-and-build
     runs-on: ubuntu-latest
     permissions:
@@ -223,11 +221,11 @@ jobs:
           } > release_notes.md
           echo "TAG=$TAG" >> "$GITHUB_ENV"
           if [ "$RELEASE_KIND" = "beta" ]; then
-            echo "RELEASE_TITLE=Beta build $TAG" >> "$GITHUB_ENV"
+            echo "RELEASE_TITLE=Beta build ${TAG#beta-}" >> "$GITHUB_ENV"
             echo "IS_PRERELEASE=false" >> "$GITHUB_ENV"
             echo "MARK_LATEST=true" >> "$GITHUB_ENV"
           else
-            echo "RELEASE_TITLE=Debug build $TAG" >> "$GITHUB_ENV"
+            echo "RELEASE_TITLE=Test build: $TAG" >> "$GITHUB_ENV"
             echo "IS_PRERELEASE=true" >> "$GITHUB_ENV"
             echo "MARK_LATEST=false" >> "$GITHUB_ENV"
           fi
